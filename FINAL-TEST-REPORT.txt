@@ -1,0 +1,57 @@
+TRINILOTBOT FINAL BUILD REPORT
+Date: 2026-09-18
+Build: 1.1.0
+
+FINAL COMMANDS
+- /ping
+- /roblox username:<name>
+- /limitedowners item:<name|acronym|asset-id> limit:<1-25>
+- /rbx2dc username:<name>
+- /dc2rb discord_user:<name-or-id>
+- /alerts action:<enable|disable|status>
+- /targets [usernames] [min_rap] [limit]
+
+WHAT WAS COMPLETED
+- Added /limitedowners with Rolimon's limited catalog autocomplete.
+- /limitedowners resolves the selected limited to a Roblox asset ID and requests public owners from Roblox's public asset-owner endpoint.
+- Owner cards include Roblox and Rolimon's profile links and serial numbers when Roblox returns them.
+- /roblox enriched with public description, creation date, Roblox verified status, friend/follower/following counts, inventory privacy status, limited inventory, RAP/value links, badges, public game link, and an exact-server join button only when the server instance is confirmed public.
+- Rolimon's item data uses current api.rolimons.com endpoints with caching and fallbacks.
+- RBLXValue integration is migrated to the v2 API base and X-Api-Key authentication for MM2 inventory lookups.
+- /targets is capped at 7 returned results and is watchlist-only. Automatic public owner discovery is handled by /limitedowners instead of live-session targeting.
+- Added Render deployment Blueprint (render.yaml), Dockerfile, .dockerignore, portable package.json, and DEPLOY_RENDER.md.
+- Secrets are not embedded in source files.
+
+TESTS PERFORMED
+PASS - Static JavaScript syntax check across 29 source files.
+PASS - package.json parses as valid JSON.
+PASS - render.yaml parses and defines a Node background worker.
+PASS - 6 local tests:
+  1. Slash command registry contains all seven commands.
+  2. /ping response remains Pong!.
+  3. Provider registry behavior.
+  4. Rate limiter behavior.
+  5. Roblox asset-owner page sizing/limit handling.
+  6. Rolimon's catalog name/acronym/id/value lookup.
+
+TEST ENVIRONMENT LIMITATION
+The working container cannot reach npm reliably, so discord.js could not be installed here for a true dependency-backed integration run. The command-registry smoke test was therefore run with a temporary local discord.js API stub, which was deleted before packaging. No node_modules directory is included in the ZIP. Render will install the real discord.js dependency during build.
+
+External Roblox/Rolimon's/RBLXValue calls also cannot be fully exercised from this container. The implemented endpoints were checked against current public documentation/web sources, but the first true network integration test happens after deployment. The bot treats provider failures as unavailable instead of inventing values or IDs.
+
+KNOWN SETUP REQUIREMENTS
+Required:
+- DISCORD_BOT_TOKEN
+
+Optional:
+- ROBLOX_RBLXVALUE_API_KEY for the MM2 provider.
+- ROBLOX_MONITOR_CHANNEL_ID / ROBLOX_MONITOR_USERNAMES for monitoring.
+- ROBLOX_TARGET_USERNAMES for the default /targets watchlist.
+- A verified association provider configured through ROBLOX_TO_DISCORD_SOURCE_URL and DISCORD_TO_ROBLOX_SOURCE_URL for /rbx2dc and /dc2rb. Without one, those commands correctly return Unavailable.
+
+DEPLOYMENT
+Target included in this build: Render Background Worker.
+See DEPLOY_RENDER.md for exact steps.
+
+IMPORTANT
+Render background workers are continuously running services and currently do not have the same free compute option as Render web services. Check Render's current pricing before creating the worker.

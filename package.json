@@ -1,0 +1,18 @@
+{
+  "name": "trinilotbot",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check-project.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1"
+  },
+  "description": "Discord bot for public Roblox profile, limited-owner, and verified account-link lookups.",
+  "engines": {
+    "node": ">=20"
+  }
+}
