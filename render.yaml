@@ -1,0 +1,19 @@
+services:
+  - type: worker
+    name: trinilotbot
+    runtime: node
+    buildCommand: npm install --no-audit --no-fund
+    startCommand: npm start
+    envVars:
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: ROBLOX_SOURCE_ROLIMONS_ENABLED
+        value: "true"
+      - key: ROBLOX_INVENTORY_MAX_PAGES
+        value: "5"
+      - key: ROBLOX_TARGET_MIN_RAP
+        value: "450000"
+      - key: DISCORD_RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: DISCORD_RATE_LIMIT_MAX_REQUESTS
+        value: "8"
