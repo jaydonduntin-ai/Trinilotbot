@@ -1,28 +1,16 @@
+import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  EmbedBuilder,
-  SlashCommandBuilder,
-} from "discord.js";
-import {
+  DEFAULT_TARGET_COUNT,
   DEFAULT_TARGET_RAP,
   MAX_TARGETS,
-  getConfiguredTargetUsernames,
-  scanConfiguredTargets,
+  scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
 
 export const targetsCommand = {
   definition: new SlashCommandBuilder()
-    .setName("targets")
+    .setName("target")
     .setDescription(
-      "Find active, joinable Roblox players above a RAP threshold.",
-    )
-    .addStringOption((option) =>
-      option
-        .setName("usernames")
-        .setDescription("Optional comma-separated Roblox usernames to scan.")
-        .setMaxLength(500),
+      "Discover random active Roblox players above a RAP threshold.",
     )
     .addIntegerOption((option) =>
       option
@@ -36,75 +24,88 @@ export const targetsCommand = {
     .addIntegerOption((option) =>
       option
         .setName("limit")
-        .setDescription(`Maximum targets to return, up to ${MAX_TARGETS}.`)
+        .setDescription(
+          `Random results to return, default ${DEFAULT_TARGET_COUNT}, max ${MAX_TARGETS}.`,
+        )
         .setMinValue(1)
         .setMaxValue(MAX_TARGETS),
     ),
 
   async execute(interaction) {
-    const rawUsernames = interaction.options.getString("usernames");
     const minimumRap = interaction.options.getInteger("min_rap") ?? undefined;
-    const limit = interaction.options.getInteger("limit") ?? MAX_TARGETS;
-    const usernames = rawUsernames
-      ? rawUsernames.split(",").slice(0, MAX_TARGETS)
-      : getConfiguredTargetUsernames();
+    const limit =
+      interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
     await interaction.deferReply({ ephemeral: true });
-    const result = await scanConfiguredTargets({ usernames, minimumRap, limit });
 
-    if (result.skipped) {
-      await interaction.editReply(
-        `${result.skipped} Provide usernames here or configure ROBLOX_TARGET_USERNAMES.`,
-      );
-      return;
-    }
-
-    const embeds = buildTargetEmbeds(result);
-    const firstPage = embeds.slice(0, 10);
-    await interaction.editReply({
-      content:
-        result.players.length > 0
-          ? "Only active players with verified public server joins are shown."
-          : "No active player met the RAP and verified-join requirements.",
-      embeds: firstPage,
-      components: buildTargetButtons(result.players.slice(0, 5)),
-    });
-
-    for (let index = 10; index < embeds.length; index += 10) {
-      const playerOffset = index - 1;
-      await interaction.followUp({
-        embeds: embeds.slice(index, index + 10),
-        components: buildTargetButtons(
-          result.players.slice(playerOffset, playerOffset + 5),
-        ),
-        ephemeral: true,
+    try {
+      const result = await scanDiscoveredTargets({
+        minimumRap,
+        limit,
       });
+
+      const embeds = buildTargetEmbeds(result);
+      await interaction.editReply({
+        content:
+          result.players.length > 0
+            ? `Found ${result.players.length} random active public profile${result.players.length === 1 ? "" : "s"} at or above ${result.minimumRap.toLocaleString()} RAP.`
+            : `No active public profile at or above ${result.minimumRap.toLocaleString()} RAP was verified in this discovery pass.`,
+        embeds: embeds.slice(0, 10),
+      });
+    } catch (error) {
+      console.error("Automatic target discovery failed:", error);
+      await interaction.editReply(
+        "Automatic target discovery is temporarily unavailable. Try again in a moment.",
+      );
     }
   },
 };
 
 function buildTargetEmbeds(result) {
+  const seedPreview = (result.seedItems ?? [])
+    .slice(0, 6)
+    .map((item) => item.name)
+    .join(" · ");
+
   const summary = new EmbedBuilder()
     .setColor(result.players.length > 0 ? 0x57f287 : 0x2f3136)
-    .setTitle("Roblox targets")
+    .setTitle("Automatic Roblox discovery")
     .setDescription(
       [
-        `Scanned ${result.usernames.length} configured username${result.usernames.length === 1 ? "" : "s"}.`,
-        `Active: ${result.activeCount ?? 0} · Minimum RAP: ${result.minimumRap.toLocaleString()}.`,
-        "A watchlist result must have a verified recentAveragePrice total and a public server instance.",
-      ].join("\n"),
+        `Owner candidates: ${result.candidateCount ?? 0}`,
+        `Active candidates checked: ${result.activeCount ?? 0}`,
+        `RAP threshold: ${result.minimumRap.toLocaleString()}`,
+        seedPreview ? `Seed limiteds: ${truncate(seedPreview, 900)}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
     )
+    .addFields({
+      name: "Sources",
+      value: truncate((result.sources ?? []).join("\n"), 1000) || "Unavailable",
+      inline: false,
+    })
     .setFooter({
-      text: "Watchlist-only scan. Use /limitedowners for automatic public owner discovery.",
+      text: "Randomized public-profile discovery. No exact server/job IDs or private inventories are exposed.",
     })
     .setTimestamp();
 
   const players = result.players.map((player) => {
     const rap = `${player.rapIsPartial ? "At least " : ""}${player.rapValue.toLocaleString()} RAP`;
-    const gameValue =
-      player.gameValue?.status === "verified"
-        ? `${player.gameValue.value.toLocaleString()} ${player.gameValue.currency}`
-        : (player.gameValue?.reason ?? "Unavailable");
+    const value =
+      typeof player.totalValue === "number"
+        ? player.totalValue.toLocaleString()
+        : "Unavailable";
+    const limiteds =
+      player.topLimiteds?.length > 0
+        ? player.topLimiteds
+            .map(
+              (item) =>
+                `[${escapeMarkdown(item.name)}](https://www.rolimons.com/item/${item.assetId}) — ${item.rap.toLocaleString()} RAP`,
+            )
+            .join("\n")
+        : "Unavailable";
+
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle(`${player.displayName} (@${player.username})`)
@@ -114,10 +115,25 @@ function buildTargetEmbeds(result) {
       )
       .addFields(
         { name: "RAP", value: rap, inline: true },
+        { name: "Value", value, inline: true },
         { name: "Presence", value: player.presenceStatus, inline: true },
-        { name: "Current game", value: player.gameName, inline: true },
-        { name: "Game scanner", value: gameValue, inline: false },
+        {
+          name: "Current game",
+          value: player.gameName ?? "Unavailable",
+          inline: true,
+        },
+        {
+          name: "RAP source",
+          value: player.rapSource ?? "Unavailable",
+          inline: false,
+        },
+        {
+          name: "Top public limiteds",
+          value: truncate(limiteds, 1000),
+          inline: false,
+        },
       );
+
     if (player.avatarUrl) {
       embed.setThumbnail(player.avatarUrl);
     }
@@ -127,17 +143,11 @@ function buildTargetEmbeds(result) {
   return [summary, ...players];
 }
 
-function buildTargetButtons(players) {
-  const buttons = [];
-  for (const player of players) {
-    buttons.push(
-      new ButtonBuilder()
-        .setLabel(`Join ${player.username}`.slice(0, 80))
-        .setStyle(ButtonStyle.Link)
-        .setURL(player.joinUrl),
-    );
-  }
-  return buttons.length > 0
-    ? [new ActionRowBuilder().addComponents(buttons.slice(0, 5))]
-    : [];
+function truncate(value, max) {
+  const text = String(value ?? "");
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function escapeMarkdown(value) {
+  return String(value).replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
 }
