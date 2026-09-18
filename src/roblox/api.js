@@ -182,6 +182,34 @@ export async function getRobloxBadges(userId) {
   return Array.isArray(payload) ? payload : payload?.data ?? [];
 }
 
+async function fetchAssetOwnersPage(url) {
+  const rawCookie = process.env.ROBLOX_SESSION_COOKIE?.trim();
+  const useCookieFirst =
+    process.env.ROBLOX_OWNER_USE_COOKIE === "true" && Boolean(rawCookie);
+
+  if (useCookieFirst) {
+    try {
+      return await fetchRobloxJson(url, {
+        headers: {
+          Cookie: normalizeRobloxSessionCookie(rawCookie),
+        },
+      });
+    } catch (error) {
+      console.warn(
+        "Authenticated Roblox owner lookup failed; retrying the public owner endpoint.",
+      );
+    }
+  }
+
+  return fetchRobloxJson(url);
+}
+
+function normalizeRobloxSessionCookie(value) {
+  const cookie = String(value ?? "").trim();
+  if (!cookie) return "";
+  return cookie.includes("=") ? cookie : `.ROBLOSECURITY=${cookie}`;
+}
+
 export async function getAssetOwners(assetId, { limit = 10 } = {}) {
   const requestedLimit = Math.max(1, Math.min(100, Number(limit) || 10));
   const owners = [];
@@ -192,9 +220,9 @@ export async function getAssetOwners(assetId, { limit = 10 } = {}) {
     // page size and slice locally so /limitedowners can accept any 1-25 limit.
     const pageSize = requestedLimit <= 10 ? 10 : 25;
     const cursorQuery = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-    const payload = await fetchRobloxJson(
-      `${INVENTORY_API_URL}/v2/assets/${encodeURIComponent(assetId)}/owners?sortOrder=Asc&limit=${pageSize}${cursorQuery}`,
-    );
+    const ownersUrl =
+      `${INVENTORY_API_URL}/v2/assets/${encodeURIComponent(assetId)}/owners?sortOrder=Asc&limit=${pageSize}${cursorQuery}`;
+    const payload = await fetchAssetOwnersPage(ownersUrl);
 
     for (const entry of payload?.data ?? []) {
       const userId = Number(entry?.owner?.id ?? entry?.ownerId ?? entry?.userId);
