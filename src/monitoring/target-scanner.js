@@ -84,7 +84,10 @@ const FOLLOW_SEEDS_PER_REFRESH = 6;
 const ROLIMONS_SEARCH_TERMS_PER_REFRESH = 6;
 const ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const JAILBREAK_TRADE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
-const ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 5;
+const DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 20;
+const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 60 * 1000;
+const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 3 * 60 * 1000;
+const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 750;
 const GROUP_SEARCH_TERMS_PER_REFRESH = 3;
 const GROUPS_PER_SEARCH_TERM = 2;
 const GROUP_MEMBERSHIP_SEEDS_PER_REFRESH = 4;
@@ -121,7 +124,11 @@ const GROUP_SEARCH_TERMS = [
 ];
 
 const candidatePool = new Map();
+const liveTargetCache = new Map();
 let targetPoolWarmupTimer = null;
+let targetLiveCacheTimer = null;
+let liveTargetCursor = 0;
+let lastLiveCacheRefreshAt = 0;
 let searchTermCursor = 0;
 let groupSearchTermCursor = 0;
 let leaderboardPageCursor = 1;
@@ -134,22 +141,266 @@ let limitedSeedCursor = 0;
 let candidateRefreshPromise = null;
 
 export function startTargetCandidatePoolWarmup() {
-  if (targetPoolWarmupTimer) return;
+  if (targetPoolWarmupTimer || targetLiveCacheTimer) return;
 
-  const refresh = async () => {
+  const refreshCandidates = async () => {
     try {
       const stats = await refreshCandidatePool();
-      console.info(`Target pool refresh: +${stats.tradeAds ?? 0} Rolimon\'s trade-ad users, ${candidatePool.size} pooled.`);
+      console.info(
+        `Target index refresh: ${candidatePool.size} pooled · ${stats.leaderboard ?? 0} leaderboard · ${stats.watchlist ?? 0} scan-watchlist.`,
+      );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
     }
   };
 
-  void refresh();
+  const refreshLive = async () => {
+    try {
+      const stats = await refreshTargetLiveCache();
+      console.info(
+        `Target live cache: ${stats.liveCount} in-game · ${stats.checkedCount} checked · ${stats.verifiedIndexCount} verified 450k+ indexed.`,
+      );
+    } catch (error) {
+      console.warn("Background target live-cache refresh failed:", error);
+    }
+  };
+
+  // Prime the verified index first, then immediately build the live cache.
+  void refreshCandidates().then(refreshLive);
+
   targetPoolWarmupTimer = setInterval(
-    refresh,
+    refreshCandidates,
     TARGET_POOL_REFRESH_INTERVAL_MS,
   );
+  targetPoolWarmupTimer.unref?.();
+
+  const liveIntervalMs = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_LIVE_CACHE_INTERVAL_MS",
+    DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS,
+  );
+  targetLiveCacheTimer = setInterval(refreshLive, liveIntervalMs);
+  targetLiveCacheTimer.unref?.();
+}
+
+export async function refreshTargetLiveCache() {
+  await syncWatchlistCandidates();
+
+  const minimumRap = getMinimumTargetRap();
+  const scanLimit = Math.max(
+    50,
+    Math.min(
+      2_500,
+      getPositiveIntegerEnv(
+        "ROBLOX_TARGET_LIVE_CACHE_SCAN_LIMIT",
+        DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT,
+      ),
+    ),
+  );
+  const ttlMs = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_LIVE_CACHE_TTL_MS",
+    DEFAULT_TARGET_LIVE_CACHE_TTL_MS,
+  );
+  const now = Date.now();
+
+  const verifiedCandidates = [...candidatePool.values()]
+    .filter(
+      (candidate) =>
+        Number.isFinite(Number(candidate?.lastKnownRap)) &&
+        Number(candidate.lastKnownRap) >= minimumRap,
+    )
+    .sort(
+      (left, right) =>
+        getCandidatePriority(
+          right,
+          { minimumValue: null, minimumRap },
+        ) -
+        getCandidatePriority(
+          left,
+          { minimumValue: null, minimumRap },
+        ),
+    );
+
+  const verifiedIds = verifiedCandidates.map((candidate) => candidate.userId);
+  if (verifiedIds.length === 0) {
+    pruneLiveTargetCache(now, ttlMs);
+    lastLiveCacheRefreshAt = now;
+    return {
+      verifiedIndexCount: 0,
+      checkedCount: 0,
+      liveCount: liveTargetCache.size,
+    };
+  }
+
+  // Recheck currently-live users and /scan watchlist members every cycle.
+  const mandatory = [];
+  const mandatorySeen = new Set();
+  const pushMandatory = (userId) => {
+    const id = Number(userId);
+    if (
+      !Number.isInteger(id) ||
+      id <= 0 ||
+      mandatorySeen.has(id) ||
+      !verifiedIds.includes(id)
+    ) {
+      return;
+    }
+    mandatorySeen.add(id);
+    mandatory.push(id);
+  };
+
+  for (const userId of liveTargetCache.keys()) pushMandatory(userId);
+  for (const candidate of verifiedCandidates) {
+    if (candidate.sources?.has("Verified /scan RAP watchlist")) {
+      pushMandatory(candidate.userId);
+    }
+  }
+
+  const rotating = verifiedIds.filter((userId) => !mandatorySeen.has(userId));
+  const remainingSlots = Math.max(0, scanLimit - mandatory.length);
+  const selectedRotating = [];
+
+  if (rotating.length > 0 && remainingSlots > 0) {
+    const start = liveTargetCursor % rotating.length;
+    for (
+      let offset = 0;
+      offset < Math.min(remainingSlots, rotating.length);
+      offset += 1
+    ) {
+      selectedRotating.push(rotating[(start + offset) % rotating.length]);
+    }
+    liveTargetCursor =
+      (start + selectedRotating.length) % rotating.length;
+  }
+
+  const selectedIds = [
+    ...mandatory.slice(0, scanLimit),
+    ...selectedRotating.slice(
+      0,
+      Math.max(0, scanLimit - mandatory.length),
+    ),
+  ];
+
+  const presenceScan = await getPresenceBatched(selectedIds, {
+    batchSize: PRESENCE_BATCH_SIZE,
+    maxAttempts: 3,
+    interBatchDelayMs: 100,
+    fallbackFetcher: getUsersPresenceFallback,
+  });
+  const checked = new Set(presenceScan.checkedIds.map(Number));
+  const presenceById = new Map(
+    presenceScan.presences.map((presence) => [
+      Number(presence?.userId),
+      presence,
+    ]),
+  );
+
+  for (const userId of selectedIds) {
+    if (!checked.has(userId)) continue;
+    const presence = presenceById.get(userId);
+    if (Number(presence?.userPresenceType) === 2) {
+      liveTargetCache.set(userId, {
+        presence,
+        checkedAt: now,
+      });
+    } else {
+      liveTargetCache.delete(userId);
+    }
+  }
+
+  pruneLiveTargetCache(now, ttlMs);
+  lastLiveCacheRefreshAt = now;
+
+  return {
+    verifiedIndexCount: verifiedIds.length,
+    checkedCount: checked.size,
+    liveCount: liveTargetCache.size,
+  };
+}
+
+function pruneLiveTargetCache(
+  now = Date.now(),
+  ttlMs = DEFAULT_TARGET_LIVE_CACHE_TTL_MS,
+) {
+  for (const [userId, entry] of liveTargetCache) {
+    if (
+      !entry?.checkedAt ||
+      now - Number(entry.checkedAt) > ttlMs
+    ) {
+      liveTargetCache.delete(userId);
+    }
+  }
+}
+
+function getFreshLiveCachePresences({
+  minimumValue = null,
+  minimumRap = null,
+  limit = MAX_TARGETS + 5,
+} = {}) {
+  const ttlMs = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_LIVE_CACHE_TTL_MS",
+    DEFAULT_TARGET_LIVE_CACHE_TTL_MS,
+  );
+  const now = Date.now();
+  pruneLiveTargetCache(now, ttlMs);
+
+  return [...liveTargetCache.entries()]
+    .filter(([userId]) => {
+      const candidate = candidatePool.get(Number(userId));
+      if (!candidate) return false;
+
+      if (
+        minimumRap !== null &&
+        minimumRap !== undefined &&
+        (!Number.isFinite(Number(candidate.lastKnownRap)) ||
+          Number(candidate.lastKnownRap) < Number(minimumRap))
+      ) {
+        return false;
+      }
+
+      if (
+        minimumValue !== null &&
+        minimumValue !== undefined &&
+        (!Number.isFinite(Number(candidate.lastKnownValue)) ||
+          Number(candidate.lastKnownValue) < Number(minimumValue))
+      ) {
+        return false;
+      }
+
+      return true;
+    })
+    .sort((left, right) => {
+      const leftCandidate = candidatePool.get(Number(left[0]));
+      const rightCandidate = candidatePool.get(Number(right[0]));
+      return (
+        getCandidatePriority(
+          rightCandidate,
+          { minimumValue, minimumRap },
+        ) -
+        getCandidatePriority(
+          leftCandidate,
+          { minimumValue, minimumRap },
+        )
+      );
+    })
+    .slice(0, Math.max(1, Number(limit) || MAX_TARGETS))
+    .map(([, entry]) => entry.presence);
+}
+
+export function getTargetLiveCacheStats() {
+  const ttlMs = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_LIVE_CACHE_TTL_MS",
+    DEFAULT_TARGET_LIVE_CACHE_TTL_MS,
+  );
+  pruneLiveTargetCache(Date.now(), ttlMs);
+  return {
+    liveCount: liveTargetCache.size,
+    lastRefreshAt: lastLiveCacheRefreshAt || null,
+    verifiedIndexCount: [...candidatePool.values()].filter(
+      (candidate) =>
+        Number.isFinite(Number(candidate?.lastKnownRap)) &&
+        Number(candidate.lastKnownRap) >= getMinimumTargetRap(),
+    ).length,
+  };
 }
 
 export async function scanDiscoveredTargets({
@@ -161,6 +412,67 @@ export async function scanDiscoveredTargets({
     MAX_TARGETS,
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
   );
+
+  const cacheStartedAt = Date.now();
+  const cachedPresences = getFreshLiveCachePresences({
+    minimumValue,
+    minimumRap,
+    limit: Math.min(MAX_TARGETS + 5, requestedLimit + 5),
+  });
+
+  if (cachedPresences.length >= requestedLimit) {
+    const cachedResults = await mapWithConcurrency(
+      cachedPresences,
+      VERIFY_CONCURRENCY,
+      (presence) =>
+        buildDiscoveredTargetPlayer(presence, {
+          minimumValue,
+          minimumRap,
+        }).catch(() => null),
+    );
+    const cachedVerified = cachedResults
+      .filter((player) => player?.qualifies)
+      .slice(0, Math.min(MAX_TARGETS, requestedLimit + 2));
+    const finalCached = await revalidateCurrentlyInGame(cachedVerified);
+
+    if (finalCached.players.length >= requestedLimit) {
+      return {
+        minimumValue,
+        minimumRap,
+        players: shuffle(finalCached.players)
+          .slice(0, requestedLimit)
+          .map(({ qualifies, ...player }) => player),
+        candidateCount: cachedPresences.length,
+        candidatePoolSize: candidatePool.size,
+        freshCandidateCount: cachedPresences.length,
+        recentlyCheckedSkipped: 0,
+        candidateSourceCounts: getPoolSourceCounts(),
+        presenceScannedCount: cachedPresences.length,
+        activeCount: cachedPresences.length,
+        verifiedCount: finalCached.players.length,
+        finalPresenceLeftGameCount: finalCached.leftGameCount,
+        finalPresenceUnavailableCount: finalCached.unavailableCount,
+        verificationAttempts: cachedResults.length,
+        valueUnavailableCount: 0,
+        belowValueCount: 0,
+        rapUnavailableCount: 0,
+        belowRapCount: 0,
+        profileUnavailableCount: 0,
+        verificationErrorCount: 0,
+        preRecheckVerifiedCount: cachedVerified.length,
+        liveCacheHit: true,
+        liveCacheSize: liveTargetCache.size,
+        verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
+        liveCacheLastRefreshAt: lastLiveCacheRefreshAt || null,
+        scanElapsedMs: Date.now() - cacheStartedAt,
+        sources: [
+          "Background verified RAP index",
+          "Background Roblox live-presence cache",
+          "Fresh Roblox final presence confirmation",
+        ],
+      };
+    }
+  }
 
   const maxPresenceCandidates = getPositiveIntegerEnv(
     "ROBLOX_TARGET_MAX_PRESENCE_CANDIDATES",
@@ -345,6 +657,10 @@ export async function scanDiscoveredTargets({
     profileUnavailableCount,
     verificationErrorCount,
     preRecheckVerifiedCount: verifiedPlayers.length,
+    liveCacheHit: false,
+    liveCacheSize: liveTargetCache.size,
+    verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
+    liveCacheLastRefreshAt: lastLiveCacheRefreshAt || null,
     scanElapsedMs: Date.now() - startedAt,
     sources: [
       ...new Set([
@@ -1688,7 +2004,16 @@ async function refreshGroupCandidateSources() {
 
 async function refreshRolimonsLeaderboardCandidates() {
   const pages = nextLeaderboardPages(
-    ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH,
+    Math.max(
+      1,
+      Math.min(
+        50,
+        getPositiveIntegerEnv(
+          "ROBLOX_TARGET_LEADERBOARD_PAGES_PER_REFRESH",
+          DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH,
+        ),
+      ),
+    ),
   );
 
   const results = await mapWithConcurrency(
@@ -2549,6 +2874,10 @@ function getCandidatePriority(
 ) {
   const sources = candidate?.sources ?? new Set();
   let score = 0;
+
+  if (liveTargetCache.has(Number(candidate?.userId))) {
+    score += 1_000;
+  }
 
   if (
     minimumValue !== null &&
