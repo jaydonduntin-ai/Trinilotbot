@@ -10,6 +10,7 @@ import {
   getUserFollowings,
   getUserRobloxGroups,
   getUsersPresence,
+  searchMarketplaceItems,
   searchRobloxGroups,
   searchRobloxUsers,
 } from "../roblox/api.js";
@@ -48,6 +49,7 @@ const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
 const TARGET_POOL_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 const LIMITED_OWNER_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const GROUP_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const MARKETPLACE_REFRESH_INTERVAL_MS = 8 * 60 * 1000;
 const DEFAULT_SEED_ITEM_COUNT = 12;
 const DEFAULT_OWNERS_PER_ITEM = 20;
 const DEFAULT_SEED_MIN_ITEM_RAP = 75_000;
@@ -67,6 +69,9 @@ const GROUP_MEMBERSHIP_SEEDS_PER_REFRESH = 4;
 const FRIEND_GROUP_SEEDS_PER_REFRESH = 4;
 const GROUP_MEMBER_LIMIT = 50;
 const GROUP_CONCURRENCY = 3;
+const MARKETPLACE_OWNER_SEEDS = 8;
+const MARKETPLACE_GROUP_SEEDS = 6;
+const MARKETPLACE_OWNER_LIMIT = 20;
 const PRESENCE_BATCH_SIZE = 50;
 const VERIFY_CONCURRENCY = 5;
 
@@ -93,6 +98,7 @@ let leaderboardPageCursor = 1;
 let lastLimitedOwnerRefreshAt = 0;
 let lastGroupRefreshAt = 0;
 let lastLeaderboardRefreshAt = 0;
+let lastMarketplaceRefreshAt = 0;
 
 export function startTargetCandidatePoolWarmup() {
   if (targetPoolWarmupTimer) return;
@@ -101,7 +107,7 @@ export function startTargetCandidatePoolWarmup() {
     try {
       const stats = await refreshGeneralCandidatePool();
       console.info(
-        `Target pool refresh: +${stats.userSearch} Roblox-search, +${stats.socialGraph} friends, +${stats.followers} followers, +${stats.followings} followings, +${stats.tradeAds} trade-ad, +${stats.rolimonsSearch} Rolimon's-search, +${stats.leaderboard} leaderboard, +${stats.limitedOwners} limited-owner, +${stats.groupSearchMembers} group-search, +${stats.groupGraphMembers} group-graph, +${stats.friendGroupMembers} friend-group users, ${candidatePool.size} pooled.`,
+        `Target pool refresh: +${stats.userSearch} Roblox-search, +${stats.socialGraph} friends, +${stats.followers} followers, +${stats.followings} followings, +${stats.tradeAds} trade-ad, +${stats.rolimonsSearch} Rolimon's-search, +${stats.leaderboard} leaderboard, +${stats.limitedOwners} Rolimon's-owner, +${stats.marketplaceCreators} marketplace-creators, +${stats.marketplaceOwners} marketplace-owners, +${stats.marketplaceGroupMembers} marketplace-group-members, +${stats.groupSearchMembers} group-search, +${stats.groupGraphMembers} group-graph, +${stats.friendGroupMembers} friend-group users, ${candidatePool.size} pooled.`,
       );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
@@ -361,6 +367,9 @@ async function discoverCandidateUserIds(
       "Roblox friends' public groups + group members",
       "Rolimon's player search",
       "Rolimon's value leaderboard",
+      "Roblox Marketplace creators",
+      "Roblox Marketplace collectible owners",
+      "Roblox Marketplace creator-group members",
     ],
   };
 }
@@ -573,6 +582,19 @@ async function refreshGeneralCandidatePool() {
     groupSourceCounts = await refreshGroupCandidateSources();
   }
 
+  let marketplaceSourceCounts = {
+    marketplaceCreators: 0,
+    marketplaceOwners: 0,
+    marketplaceGroupMembers: 0,
+  };
+  if (
+    Date.now() - lastMarketplaceRefreshAt >=
+    MARKETPLACE_REFRESH_INTERVAL_MS
+  ) {
+    lastMarketplaceRefreshAt = Date.now();
+    marketplaceSourceCounts = await refreshMarketplaceCandidateSources();
+  }
+
   pruneCandidatePool();
 
   return {
@@ -585,6 +607,157 @@ async function refreshGeneralCandidatePool() {
     leaderboard: leaderboardUserIds.length,
     limitedOwners: limitedOwnerUserIds.length,
     ...groupSourceCounts,
+    ...marketplaceSourceCounts,
+  };
+}
+
+async function refreshMarketplaceCandidateSources() {
+  const queryPlans = [
+    { sortType: 2, sortAggregation: 5 },
+    { sortType: 1, sortAggregation: 5 },
+    { sortType: 3, sortAggregation: 1 },
+  ];
+
+  const resultSets = await Promise.all(
+    queryPlans.map(async (plan) => {
+      try {
+        const result = await searchMarketplaceItems({
+          category: 2,
+          subcategory: 2,
+          sortType: plan.sortType,
+          sortAggregation: plan.sortAggregation,
+          limit: 30,
+        });
+        return result.items;
+      } catch (error) {
+        console.warn("Roblox Marketplace discovery failed:", error);
+        return [];
+      }
+    }),
+  );
+
+  const items = resultSets.flat();
+
+  const creatorUserIds = [
+    ...new Set(
+      items
+        .filter(
+          (item) =>
+            String(item?.creatorType ?? "").toLowerCase() === "user",
+        )
+        .map((item) => Number(item?.creatorTargetId))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
+  addCandidatesToPool(
+    creatorUserIds,
+    "Roblox Marketplace creators",
+    Date.now(),
+  );
+
+  const ownerSeedAssets = shuffle(
+    items.filter((item) => {
+      const restrictions = Array.isArray(item?.itemRestrictions)
+        ? item.itemRestrictions
+        : [];
+      return (
+        Number.isInteger(Number(item?.id)) &&
+        restrictions.some((value) =>
+          ["collectible", "limited", "limitedunique"].includes(
+            String(value).toLowerCase(),
+          ),
+        )
+      );
+    }),
+  )
+    .slice(0, MARKETPLACE_OWNER_SEEDS)
+    .map((item) => Number(item.id));
+
+  const ownerLists = await mapWithConcurrency(
+    ownerSeedAssets,
+    OWNER_CONCURRENCY,
+    async (assetId) => {
+      try {
+        const result = await getAssetOwners(assetId, {
+          limit: MARKETPLACE_OWNER_LIMIT,
+        });
+        return result.owners;
+      } catch (error) {
+        console.warn(
+          `Roblox Marketplace owner discovery failed for asset ${assetId}:`,
+          error,
+        );
+        return [];
+      }
+    },
+  );
+
+  const ownerUserIds = [
+    ...new Set(
+      ownerLists
+        .flat()
+        .map((owner) => Number(owner?.userId))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
+  addCandidatesToPool(
+    ownerUserIds,
+    "Roblox Marketplace collectible owners",
+    Date.now(),
+  );
+
+  const creatorGroupIds = shuffle([
+    ...new Set(
+      items
+        .filter(
+          (item) =>
+            String(item?.creatorType ?? "").toLowerCase() === "group",
+        )
+        .map((item) => Number(item?.creatorTargetId))
+        .filter((groupId) => Number.isInteger(groupId) && groupId > 0),
+    ),
+  ]).slice(0, MARKETPLACE_GROUP_SEEDS);
+
+  const groupMemberLists = await mapWithConcurrency(
+    creatorGroupIds,
+    GROUP_CONCURRENCY,
+    async (groupId) => {
+      try {
+        const result = await getRobloxGroupUsers(groupId, {
+          limit: GROUP_MEMBER_LIMIT,
+        });
+        return result.users;
+      } catch (error) {
+        console.warn(
+          `Roblox Marketplace creator-group discovery failed for group ${groupId}:`,
+          error,
+        );
+        return [];
+      }
+    },
+  );
+
+  const marketplaceGroupUserIds = [
+    ...new Set(
+      groupMemberLists
+        .flat()
+        .map((user) => Number(user?.id))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
+  addCandidatesToPool(
+    marketplaceGroupUserIds,
+    "Roblox Marketplace creator-group members",
+    Date.now(),
+  );
+
+  return {
+    marketplaceCreators: creatorUserIds.length,
+    marketplaceOwners: ownerUserIds.length,
+    marketplaceGroupMembers: marketplaceGroupUserIds.length,
   };
 }
 
