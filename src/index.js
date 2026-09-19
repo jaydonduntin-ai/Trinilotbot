@@ -30,17 +30,30 @@ client.once(Events.ClientReady, async (readyClient) => {
   const rest = new REST({ version: "10" }).setToken(token);
 
   try {
-    await rest.put(Routes.applicationCommands(readyClient.user.id), {
-      body: commandModules.map((command) => command.definition.toJSON()),
-    });
+    const desiredCommands = commandModules.map((command) =>
+      command.definition.toJSON(),
+    );
+    const existingCommands = await rest.get(
+      Routes.applicationCommands(readyClient.user.id),
+    );
 
-    const commandNames = commandModules
-      .map((command) => `/${command.definition.name}`)
-      .join(", ");
-    console.info(`Registered commands: ${commandNames}`);
+    if (!commandDefinitionsMatch(existingCommands, desiredCommands)) {
+      await rest.put(Routes.applicationCommands(readyClient.user.id), {
+        body: desiredCommands,
+      });
+
+      const commandNames = desiredCommands
+        .map((command) => `/${command.name}`)
+        .join(", ");
+      console.info(`Updated commands: ${commandNames}`);
+    } else {
+      console.info(
+        "Slash commands already match Discord; skipped global overwrite.",
+      );
+    }
   } catch (error) {
     console.error(
-      "Slash-command registration failed. Keeping the bot online so the error can be diagnosed:",
+      "Slash-command registration check failed. Keeping the bot online so the error can be diagnosed:",
       error,
     );
   }
@@ -55,7 +68,9 @@ client.once(Events.ClientReady, async (readyClient) => {
     );
   }
 
-  startTargetCandidatePoolWarmup();
+  setTimeout(() => {
+    startTargetCandidatePoolWarmup();
+  }, 10_000);
 
   try {
     await startMonitoring(client);
@@ -132,6 +147,62 @@ client.on(Events.ShardError, (error) => {
 client.on(Events.Warn, (warning) => {
   console.warn("Discord warning:", warning);
 });
+
+function commandDefinitionsMatch(existingCommands, desiredCommands) {
+  if (!Array.isArray(existingCommands)) return false;
+  if (existingCommands.length !== desiredCommands.length) return false;
+
+  const normalizeOption = (option) => ({
+    type: Number(option?.type),
+    name: option?.name ?? "",
+    description: option?.description ?? "",
+    required: Boolean(option?.required),
+    autocomplete: Boolean(option?.autocomplete),
+    min_value:
+      option?.min_value === undefined ? null : Number(option.min_value),
+    max_value:
+      option?.max_value === undefined ? null : Number(option.max_value),
+    min_length:
+      option?.min_length === undefined ? null : Number(option.min_length),
+    max_length:
+      option?.max_length === undefined ? null : Number(option.max_length),
+    choices: Array.isArray(option?.choices)
+      ? option.choices.map((choice) => ({
+          name: choice?.name ?? "",
+          value: choice?.value ?? null,
+        }))
+      : [],
+    options: Array.isArray(option?.options)
+      ? option.options.map(normalizeOption)
+      : [],
+  });
+
+  const normalizeCommand = (command) => ({
+    type: Number(command?.type ?? 1),
+    name: command?.name ?? "",
+    description: command?.description ?? "",
+    options: Array.isArray(command?.options)
+      ? command.options.map(normalizeOption)
+      : [],
+  });
+
+  const existing = existingCommands
+    .map(normalizeCommand)
+    .sort((left, right) =>
+      `${left.type}:${left.name}`.localeCompare(
+        `${right.type}:${right.name}`,
+      ),
+    );
+  const desired = desiredCommands
+    .map(normalizeCommand)
+    .sort((left, right) =>
+      `${left.type}:${left.name}`.localeCompare(
+        `${right.type}:${right.name}`,
+      ),
+    );
+
+  return JSON.stringify(existing) === JSON.stringify(desired);
+}
 
 try {
   await client.login(token);
