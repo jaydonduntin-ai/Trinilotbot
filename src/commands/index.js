@@ -5,7 +5,6 @@ import { limitedOwnersCommand } from "./limitedowners.js";
 import { rbx2dcCommand } from "./rbx2dc.js";
 import { robloxCommand } from "./roblox.js";
 import { targetsCommand } from "./targets.js";
-import { rbx2admCommand, rbx2mm2Command } from "./game-targets.js";
 
 export const commandModules = [
   pingCommand,
@@ -15,6 +14,4 @@ export const commandModules = [
   dc2rbCommand,
   alertsCommand,
   targetsCommand,
-  rbx2mm2Command,
-  rbx2admCommand,
 ];
