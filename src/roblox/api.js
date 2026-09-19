@@ -335,6 +335,30 @@ export async function getRobloxGroupUsers(
   };
 }
 
+export async function getUserPrimaryGroup(userId) {
+  const normalizedId = Number(userId);
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    return null;
+  }
+
+  const payload = await fetchRobloxJson(
+    `${GROUPS_API_URL}/v1/users/${encodeURIComponent(
+      normalizedId,
+    )}/groups/primary/role`,
+  );
+
+  const group = payload?.group ?? payload;
+  const id = Number(group?.id ?? group?.groupId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+
+  return {
+    id,
+    name: group?.name ?? null,
+  };
+}
+
 export async function getUserRobloxGroups(userId) {
   const normalizedId = Number(userId);
   if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
