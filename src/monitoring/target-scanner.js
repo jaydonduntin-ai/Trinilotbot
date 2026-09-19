@@ -128,6 +128,14 @@ const GROUP_SEARCH_TERMS = [
 
 const candidatePool = new Map();
 const liveTargetCache = new Map();
+
+// /scan is an expansion command, not a replay command. Keep a runtime history
+// of users already surfaced by /target and candidates already attempted by
+// /scan at a given threshold. The persisted /scan watchlist remains the
+// authoritative long-term dedupe source when durable storage is configured.
+const surfacedTargetIds = new Set();
+const scanReservedIds = new Set();
+const scanAttemptedByThreshold = new Map();
 let targetPoolWarmupTimer = null;
 let targetLiveCacheTimer = null;
 let liveTargetCursor = 0;
@@ -406,6 +414,37 @@ export function getTargetLiveCacheStats() {
   };
 }
 
+function rememberSurfacedTargets(players) {
+  for (const player of players ?? []) {
+    const userId = Number(player?.id ?? player?.userId);
+    if (Number.isInteger(userId) && userId > 0) {
+      surfacedTargetIds.add(userId);
+    }
+  }
+}
+
+function getScanAttemptKey(minimumRap, minimumValue) {
+  return `${minimumRap ?? "none"}:${minimumValue ?? "none"}`;
+}
+
+function getScanAttemptSet(minimumRap, minimumValue) {
+  const key = getScanAttemptKey(minimumRap, minimumValue);
+  let attempted = scanAttemptedByThreshold.get(key);
+  if (!attempted) {
+    attempted = new Set();
+    scanAttemptedByThreshold.set(key, attempted);
+  }
+  return attempted;
+}
+
+function countPoolMatches(ids) {
+  let count = 0;
+  for (const rawId of ids ?? []) {
+    if (candidatePool.has(Number(rawId))) count += 1;
+  }
+  return count;
+}
+
 export async function scanDiscoveredTargets({
   minimumValue = null,
   minimumRap = getMinimumTargetRap(),
@@ -439,12 +478,15 @@ export async function scanDiscoveredTargets({
     const finalCached = await revalidateCurrentlyInGame(cachedVerified);
 
     if (finalCached.players.length >= requestedLimit) {
+      const selectedPlayers = shuffle(finalCached.players)
+        .slice(0, requestedLimit)
+        .map(({ qualifies, ...player }) => player);
+      rememberSurfacedTargets(selectedPlayers);
+
       return {
         minimumValue,
         minimumRap,
-        players: shuffle(finalCached.players)
-          .slice(0, requestedLimit)
-          .map(({ qualifies, ...player }) => player),
+        players: selectedPlayers,
         candidateCount: cachedPresences.length,
         candidatePoolSize: candidatePool.size,
         freshCandidateCount: cachedPresences.length,
@@ -637,13 +679,15 @@ export async function scanDiscoveredTargets({
   const stillInGamePlayers = await revalidateCurrentlyInGame(
     verifiedPlayers,
   );
+  const selectedPlayers = shuffle(stillInGamePlayers.players)
+    .slice(0, requestedLimit)
+    .map(({ qualifies, ...player }) => player);
+  rememberSurfacedTargets(selectedPlayers);
 
   return {
     minimumValue,
     minimumRap,
-    players: shuffle(stillInGamePlayers.players)
-      .slice(0, requestedLimit)
-      .map(({ qualifies, ...player }) => player),
+    players: selectedPlayers,
     candidateCount: discovery.userIds.length,
     candidatePoolSize: discovery.candidatePoolSize,
     freshCandidateCount: discovery.freshCandidateCount,
@@ -686,19 +730,39 @@ export async function scanCandidatesForWatchlist({
   limit = 25,
 } = {}) {
   const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 25));
-  // /scan is for expanding the verified pool. Do not spend the pass
-  // re-verifying users that are already on the watchlist.
+  // /scan is for expanding the verified pool. Exclude persisted watchlist
+  // members, users already surfaced by /target in this runtime, users already
+  // returned by a prior /scan, and candidates already attempted at this exact
+  // threshold. This prevents repeated scans from looping over the same high-
+  // priority candidates.
   const watchedIds = new Set(
     (await getScanWatchlist())
       .map((entry) => Number(entry?.userId))
       .filter((userId) => Number.isInteger(userId) && userId > 0),
+  );
+  const attemptedIds = getScanAttemptSet(minimumRap, minimumValue);
+  const excludedIds = new Set([
+    ...watchedIds,
+    ...surfacedTargetIds,
+    ...scanReservedIds,
+    ...attemptedIds,
+  ]);
+
+  const watchedSkipped = countPoolMatches(watchedIds);
+  const previousTargetSkipped = countPoolMatches(
+    [...surfacedTargetIds].filter((id) => !watchedIds.has(id)),
+  );
+  const previousScanSkipped = countPoolMatches(
+    [...new Set([...scanReservedIds, ...attemptedIds])].filter(
+      (id) => !watchedIds.has(id) && !surfacedTargetIds.has(id),
+    ),
   );
 
   const discovery = await discoverCandidateUserIds({
     minimumValue,
     minimumRap,
     respectCooldown: false,
-    excludeUserIds: watchedIds,
+    excludeUserIds: excludedIds,
     maxCandidatesOverride: getPositiveIntegerEnv(
       "ROBLOX_TARGET_MAX_PRESENCE_CANDIDATES",
       DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES,
@@ -734,6 +798,7 @@ export async function scanCandidatesForWatchlist({
 
     const batch = candidates.slice(index, index + VERIFY_CONCURRENCY);
     checkedCount += batch.length;
+    for (const userId of batch) attemptedIds.add(Number(userId));
 
     const results = await Promise.all(
       batch.map((userId) =>
@@ -763,14 +828,26 @@ export async function scanCandidatesForWatchlist({
     }
   }
 
+  const selectedPlayers = verified
+    .slice(0, requestedLimit)
+    .map(({ qualifies, ...player }) => player);
+
+  for (const player of selectedPlayers) {
+    const userId = Number(player?.id ?? player?.userId);
+    if (Number.isInteger(userId) && userId > 0) {
+      scanReservedIds.add(userId);
+    }
+  }
+
   return {
-    players: verified
-      .slice(0, requestedLimit)
-      .map(({ qualifies, ...player }) => player),
+    players: selectedPlayers,
     minimumRap,
     minimumValue,
     checkedCount,
-    alreadyWatchedSkipped: discovery.excludedCandidateCount,
+    alreadyWatchedSkipped: watchedSkipped,
+    previousTargetSkipped,
+    previousScanSkipped,
+    totalExcludedFromExpansion: discovery.excludedCandidateCount,
     candidatePoolSize: discovery.candidatePoolSize,
     candidateSourceCounts: discovery.candidateSourceCounts,
     scanElapsedMs: Date.now() - startedAt,
