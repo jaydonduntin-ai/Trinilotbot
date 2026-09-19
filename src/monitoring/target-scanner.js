@@ -14,6 +14,7 @@ import {
   getUserPrimaryGroup,
   getUserRobloxGroups,
   getUsersPresence,
+  lookupRobloxUsers,
   searchMarketplaceItems,
   searchRobloxGroups,
   searchRobloxUsers,
@@ -25,6 +26,7 @@ import {
   getRolimonsItems,
 } from "../sources/rolimons-items.js";
 import { getRecentTradeAdPlayers } from "../sources/rolimons-trade-ads.js";
+import { getJailbreakTradeCandidates } from "../sources/jailbreak-trading-network.js";
 import { getRolimonsLeaderboardPlayers } from "../sources/rolimons-leaderboard.js";
 import { searchRolimonsPlayers } from "../sources/rolimons-player-search.js";
 import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
@@ -77,6 +79,7 @@ const SOCIAL_CONCURRENCY = 4;
 const FOLLOW_SEEDS_PER_REFRESH = 6;
 const ROLIMONS_SEARCH_TERMS_PER_REFRESH = 6;
 const ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const JAILBREAK_TRADE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 5;
 const GROUP_SEARCH_TERMS_PER_REFRESH = 3;
 const GROUPS_PER_SEARCH_TERM = 2;
@@ -122,6 +125,8 @@ let lastLimitedOwnerRefreshAt = 0;
 let lastGroupRefreshAt = 0;
 let lastLeaderboardRefreshAt = 0;
 let lastMarketplaceRefreshAt = 0;
+let lastJailbreakTradeRefreshAt = 0;
+let limitedSeedCursor = 0;
 let candidateRefreshPromise = null;
 
 export function startTargetCandidatePoolWarmup() {
@@ -884,6 +889,7 @@ async function discoverCandidateUserIds({
       "Roblox Marketplace collectible owners",
       "Rolimon's value leaderboard",
       "Rolimon's recent trade ads",
+      "Jailbreak Trading Network public trade listings",
     ],
   };
 }
@@ -968,6 +974,17 @@ async function refreshGeneralCandidatePool() {
     lastMarketplaceRefreshAt = now;
   }
 
+  let jailbreakTradeUserIds = [];
+  if (now - lastJailbreakTradeRefreshAt >= JAILBREAK_TRADE_REFRESH_INTERVAL_MS) {
+    jailbreakTradeUserIds = await refreshJailbreakTradeCandidates().catch(
+      (error) => {
+        console.warn("Jailbreak Trading Network discovery failed:", error);
+        return [];
+      },
+    );
+    lastJailbreakTradeRefreshAt = now;
+  }
+
   pruneCandidatePool();
 
   return {
@@ -975,8 +992,44 @@ async function refreshGeneralCandidatePool() {
     tradeAds: tradeAdUserIds.length,
     limitedOwners: limitedOwnerUserIds.length,
     leaderboard: leaderboardUserIds.length,
+    jailbreakTrades: jailbreakTradeUserIds.length,
     ...marketplaceStats,
   };
+}
+
+async function refreshJailbreakTradeCandidates() {
+  const result = await getJailbreakTradeCandidates();
+  const ids = new Set(
+    (result?.userIds ?? [])
+      .map(Number)
+      .filter((userId) => Number.isInteger(userId) && userId > 0),
+  );
+
+  const usernames = [...new Set(
+    (result?.usernames ?? [])
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean),
+  )].slice(0, 200);
+
+  if (usernames.length > 0) {
+    try {
+      const resolved = await lookupRobloxUsers(usernames);
+      for (const user of resolved ?? []) {
+        const userId = Number(user?.id);
+        if (Number.isInteger(userId) && userId > 0) ids.add(userId);
+      }
+    } catch (error) {
+      console.warn("Could not resolve Jailbreak trade usernames:", error);
+    }
+  }
+
+  const userIds = [...ids];
+  addCandidatesToPool(
+    userIds,
+    "Jailbreak Trading Network public trade listings",
+    Date.now(),
+  );
+  return userIds;
 }
 
 async function refreshMarketplaceCandidateSources() {
@@ -1707,16 +1760,32 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
         ),
     );
 
-    const highValueSeeds = shuffle(
-      dataset.items.filter(
+    const eligibleSeeds = dataset.items
+      .filter(
         (item) =>
           Math.max(Number(item.rap) || 0, Number(item.value) || 0) >=
           seedFloor,
-      ),
-    );
+      )
+      .sort(
+        (left, right) =>
+          Math.max(Number(right.rap) || 0, Number(right.value) || 0) -
+          Math.max(Number(left.rap) || 0, Number(left.value) || 0),
+      );
+
+    const rotatingSeeds = [];
+    if (eligibleSeeds.length > 0) {
+      const rotatingCount = Math.max(seedItemCount * 2, 24);
+      for (let index = 0; index < rotatingCount; index += 1) {
+        rotatingSeeds.push(
+          eligibleSeeds[(limitedSeedCursor + index) % eligibleSeeds.length],
+        );
+      }
+      limitedSeedCursor =
+        (limitedSeedCursor + rotatingCount) % eligibleSeeds.length;
+    }
 
     const seedItems = takeUniqueItems(
-      [...tradeAdSeeds, ...highValueSeeds],
+      [...tradeAdSeeds, ...rotatingSeeds],
       seedItemCount,
     );
 
@@ -2135,6 +2204,7 @@ function getPoolSourceCounts() {
     followers: 0,
     followings: 0,
     tradeAds: 0,
+    jailbreakTrades: 0,
     rolimonsSearch: 0,
     leaderboard: 0,
     limitedOwners: 0,
@@ -2157,6 +2227,7 @@ function getPoolSourceCounts() {
     ["Roblox public followers", "followers"],
     ["Roblox public followings", "followings"],
     ["Rolimon's recent trade ads", "tradeAds"],
+    ["Jailbreak Trading Network public trade listings", "jailbreakTrades"],
     ["Rolimon's player search", "rolimonsSearch"],
     ["Rolimon's value leaderboard", "leaderboard"],
     [
