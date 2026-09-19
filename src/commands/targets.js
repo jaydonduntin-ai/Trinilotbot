@@ -72,6 +72,8 @@ function buildTargetEmbeds(result) {
         `Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `Currently in-game seen: ${result.activeCount ?? 0}`,
         `RAP checks attempted: ${result.verificationAttempts ?? 0}`,
+        `RAP unavailable: ${result.rapUnavailableCount ?? 0}`,
+        `Below threshold: ${result.belowThresholdCount ?? 0}`,
         `Cooling candidates skipped: ${result.recentlyCheckedSkipped ?? 0}`,
         `Roblox search: ${result.candidateSourceCounts?.userSearch ?? 0}`,
         `Roblox friends: ${result.candidateSourceCounts?.socialGraph ?? 0}`,
