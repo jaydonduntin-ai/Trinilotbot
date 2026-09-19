@@ -55,6 +55,8 @@ const DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES = 2_500;
 const DEFAULT_TARGET_SCAN_WAVE_SIZE = 500;
 const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 45_000;
 const DEFAULT_GAME_SCAN_CANDIDATES = 1_200;
+const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 25_000;
+const DEFAULT_GAME_SCAN_WAVE_SIZE = 300;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 5_000;
 const DEFAULT_POOL_TTL_MS = 12 * 60 * 60 * 1000;
@@ -583,6 +585,7 @@ async function revalidatePlayersForGame(players, game) {
 
 export async function scanGameTargets({
   gameKey,
+  minimumValue = null,
   minimumRap = getMinimumTargetRap(),
   limit = DEFAULT_TARGET_COUNT,
 } = {}) {
@@ -598,7 +601,7 @@ export async function scanGameTargets({
 
   const discovery = await discoverCandidateUserIds({
     minimumRap,
-    minimumValue: null,
+    minimumValue,
     respectCooldown: false,
     maxCandidatesOverride: getPositiveIntegerEnv(
       "ROBLOX_GAME_TARGET_MAX_CANDIDATES",
@@ -606,79 +609,126 @@ export async function scanGameTargets({
     ),
   });
 
-  if (discovery.userIds.length === 0) {
-    return {
-      gameKey,
-      gameLabel: game.label,
-      universeId: game.universeId,
-      minimumRap,
-      players: [],
-      candidateCount: 0,
-      candidatePoolSize: discovery.candidatePoolSize,
-      candidateSourceCounts: discovery.candidateSourceCounts,
-      gameActiveCount: 0,
-      verifiedCount: 0,
-      sources: discovery.sources,
-    };
-  }
-
-  const presenceScan = await getPresenceBatched(discovery.userIds);
-  const gamePresences = shuffle(
-    presenceScan.presences.filter((presence) =>
-      isPresenceForGame(presence, game),
-    ),
-  );
-
+  const startedAt = Date.now();
   const verifiedPlayers = [];
-  for (
-    let index = 0;
-    index < gamePresences.length;
-    index += VERIFY_CONCURRENCY
-  ) {
-    const batch = gamePresences.slice(index, index + VERIFY_CONCURRENCY);
-    const batchResults = await Promise.all(
-      batch.map((presence) =>
-        buildDiscoveredTargetPlayer(presence, {
-          minimumRap,
-          minimumValue: null,
-        }).catch((error) => {
-          console.warn(
-            `${game.label} target verification failed for Roblox user ${presence.userId}:`,
-            error,
-          );
-          return null;
-        }),
-      ),
-    );
+  const activeSeen = new Map();
+  let presenceScannedCount = 0;
+  let verificationAttempts = 0;
+  let valueUnavailableCount = 0;
+  let belowValueCount = 0;
+  let rapUnavailableCount = 0;
+  let belowRapCount = 0;
 
-    for (const player of batchResults) {
-      if (player?.qualifies) {
-        verifiedPlayers.push(player);
-      }
+  for (
+    let offset = 0;
+    offset < discovery.userIds.length;
+    offset += DEFAULT_GAME_SCAN_WAVE_SIZE
+  ) {
+    if (Date.now() - startedAt >= DEFAULT_GAME_SCAN_TIME_BUDGET_MS) break;
+    if (verifiedPlayers.length >= requestedLimit) break;
+
+    const wave = discovery.userIds.slice(
+      offset,
+      offset + DEFAULT_GAME_SCAN_WAVE_SIZE,
+    );
+    const presenceScan = await getPresenceBatched(wave);
+    presenceScannedCount += presenceScan.checkedIds.length;
+
+    const gamePresences = presenceScan.presences
+      .filter((presence) => isPresenceForGame(presence, game))
+      .sort(
+        (left, right) =>
+          getCandidatePriority(
+            candidatePool.get(Number(right.userId)),
+            { minimumValue, minimumRap },
+          ) -
+          getCandidatePriority(
+            candidatePool.get(Number(left.userId)),
+            { minimumValue, minimumRap },
+          ),
+      );
+
+    for (const presence of gamePresences) {
+      activeSeen.set(Number(presence.userId), presence);
     }
 
-    if (verifiedPlayers.length >= requestedLimit) break;
+    for (
+      let index = 0;
+      index < gamePresences.length;
+      index += VERIFY_CONCURRENCY
+    ) {
+      if (Date.now() - startedAt >= DEFAULT_GAME_SCAN_TIME_BUDGET_MS) break;
+      if (verifiedPlayers.length >= requestedLimit) break;
+
+      const batch = gamePresences.slice(index, index + VERIFY_CONCURRENCY);
+      verificationAttempts += batch.length;
+
+      const batchResults = await Promise.all(
+        batch.map((presence) =>
+          buildDiscoveredTargetPlayer(presence, {
+            minimumValue,
+            minimumRap,
+          }).catch((error) => {
+            console.warn(
+              `${game.label} target verification failed for Roblox user ${presence.userId}:`,
+              error,
+            );
+            return null;
+          }),
+        ),
+      );
+
+      for (const player of batchResults) {
+        if (player?.qualifies) {
+          verifiedPlayers.push(player);
+        } else if (player?.reason === "value-unavailable") {
+          valueUnavailableCount += 1;
+        } else if (player?.reason === "below-value") {
+          belowValueCount += 1;
+        } else if (player?.reason === "rap-unavailable") {
+          rapUnavailableCount += 1;
+        } else if (player?.reason === "below-rap") {
+          belowRapCount += 1;
+        }
+      }
+    }
   }
+
+  const stillInGamePlayers = await revalidatePlayersForGame(
+    verifiedPlayers,
+    game,
+  );
 
   return {
     gameKey,
     gameLabel: game.label,
     universeId: game.universeId,
+    minimumValue,
     minimumRap,
-    players: shuffle(verifiedPlayers)
+    players: shuffle(stillInGamePlayers)
       .slice(0, requestedLimit)
       .map(({ qualifies, ...player }) => player),
     candidateCount: discovery.userIds.length,
     candidatePoolSize: discovery.candidatePoolSize,
     candidateSourceCounts: discovery.candidateSourceCounts,
-    gameActiveCount: gamePresences.length,
-    verifiedCount: verifiedPlayers.length,
+    presenceScannedCount,
+    gameActiveCount: activeSeen.size,
+    verificationAttempts,
+    valueUnavailableCount,
+    belowValueCount,
+    rapUnavailableCount,
+    belowRapCount,
+    verifiedCount: stillInGamePlayers.length,
+    scanElapsedMs: Date.now() - startedAt,
     sources: [
       ...new Set([
         ...discovery.sources,
         "Roblox public presence",
         "Roblox public collectibles inventory",
-        "Rolimon's public player info (RAP/value cross-check only)",
+        "Rolimon's public player info/value enrichment",
+        ...(gameKey === "mm2"
+          ? ["RBLXValue profile/inventory enrichment when available"]
+          : []),
       ]),
     ],
   };
