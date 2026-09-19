@@ -1,5 +1,6 @@
 import {
   getAvatarThumbnail,
+  getAssetOwners,
   getGameDetails,
   getRobloxUserById,
   getUserFriends,
@@ -8,6 +9,8 @@ import {
 } from "../roblox/api.js";
 import { getInventorySummary } from "../roblox/inventory.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
+import { getRolimonsItems } from "../sources/rolimons-items.js";
+import { getRecentTradeAdPlayers } from "../sources/rolimons-trade-ads.js";
 import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
 
@@ -35,6 +38,12 @@ const DEFAULT_POOL_MAX_SIZE = 5_000;
 const DEFAULT_POOL_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
 const TARGET_POOL_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+const LIMITED_OWNER_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const DEFAULT_SEED_ITEM_COUNT = 12;
+const DEFAULT_OWNERS_PER_ITEM = 20;
+const DEFAULT_SEED_MIN_ITEM_RAP = 75_000;
+const OWNER_CONCURRENCY = 4;
+const OWNER_DISCOVERY_BUDGET_MS = 12_000;
 const SEARCH_TERMS_PER_REFRESH = 12;
 const SOCIAL_SEEDS_PER_REFRESH = 10;
 const SEARCH_CONCURRENCY = 4;
@@ -54,6 +63,7 @@ const SEARCH_TERMS = [
 const candidatePool = new Map();
 let targetPoolWarmupTimer = null;
 let searchTermCursor = 0;
+let lastLimitedOwnerRefreshAt = 0;
 
 export function startTargetCandidatePoolWarmup() {
   if (targetPoolWarmupTimer) return;
@@ -62,7 +72,7 @@ export function startTargetCandidatePoolWarmup() {
     try {
       const stats = await refreshGeneralCandidatePool();
       console.info(
-        `General target pool refresh: +${stats.userSearch} search users, +${stats.socialGraph} social users, ${candidatePool.size} pooled.`,
+        `Target pool refresh: +${stats.userSearch} search, +${stats.socialGraph} social, +${stats.tradeAds} trade-ad, +${stats.limitedOwners} limited-owner users, ${candidatePool.size} pooled.`,
       );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
@@ -305,6 +315,8 @@ async function discoverCandidateUserIds(
     sources: [
       "Roblox public user search",
       "Roblox public friends graph",
+      "Rolimon's recent trade ads",
+      "Rolimon's limited catalog + Roblox public asset owners",
     ],
   };
 }
@@ -312,19 +324,25 @@ async function discoverCandidateUserIds(
 async function refreshGeneralCandidatePool() {
   const terms = nextSearchTerms(SEARCH_TERMS_PER_REFRESH);
 
-  const searchResults = await mapWithConcurrency(
-    terms,
-    SEARCH_CONCURRENCY,
-    async (term) => {
-      try {
-        const result = await searchRobloxUsers(term, { limit: 10 });
-        return result.users;
-      } catch (error) {
-        console.warn(`Roblox user search failed for "${term}":`, error);
-        return [];
-      }
-    },
-  );
+  const [searchResults, tradeAdsResult] = await Promise.all([
+    mapWithConcurrency(
+      terms,
+      SEARCH_CONCURRENCY,
+      async (term) => {
+        try {
+          const result = await searchRobloxUsers(term, { limit: 10 });
+          return result.users;
+        } catch (error) {
+          console.warn(`Roblox user search failed for "${term}":`, error);
+          return [];
+        }
+      },
+    ),
+    getRecentTradeAdPlayers().catch((error) => {
+      console.warn("Rolimon's trade-ad discovery failed:", error);
+      return null;
+    }),
+  ]);
 
   const searchUserIds = [
     ...new Set(
@@ -335,8 +353,21 @@ async function refreshGeneralCandidatePool() {
     ),
   ];
 
+  const tradeAdUserIds = [
+    ...new Set(
+      (tradeAdsResult?.players ?? [])
+        .map((player) => Number(player?.userId))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
   const now = Date.now();
   addCandidatesToPool(searchUserIds, "Roblox public user search", now);
+  addCandidatesToPool(
+    tradeAdUserIds,
+    "Rolimon's recent trade ads",
+    now,
+  );
 
   const socialSeeds = selectSocialExpansionSeeds(SOCIAL_SEEDS_PER_REFRESH);
   const socialResults = await mapWithConcurrency(
@@ -372,12 +403,139 @@ async function refreshGeneralCandidatePool() {
     "Roblox public friends graph",
     Date.now(),
   );
+
+  let limitedOwnerUserIds = [];
+  if (
+    Date.now() - lastLimitedOwnerRefreshAt >=
+    LIMITED_OWNER_REFRESH_INTERVAL_MS
+  ) {
+    lastLimitedOwnerRefreshAt = Date.now();
+    limitedOwnerUserIds = await refreshLimitedOwnerCandidates(
+      tradeAdsResult?.itemIds ?? [],
+    );
+    addCandidatesToPool(
+      limitedOwnerUserIds,
+      "Rolimon's limited catalog + Roblox public asset owners",
+      Date.now(),
+    );
+  }
+
   pruneCandidatePool();
 
   return {
     userSearch: searchUserIds.length,
     socialGraph: socialUserIds.length,
+    tradeAds: tradeAdUserIds.length,
+    limitedOwners: limitedOwnerUserIds.length,
   };
+}
+
+async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
+  try {
+    const dataset = await getRolimonsItems();
+    const seedItemCount = getPositiveIntegerEnv(
+      "ROBLOX_TARGET_SEED_ITEM_COUNT",
+      DEFAULT_SEED_ITEM_COUNT,
+    );
+    const ownersPerItem = getPositiveIntegerEnv(
+      "ROBLOX_TARGET_OWNERS_PER_ITEM",
+      DEFAULT_OWNERS_PER_ITEM,
+    );
+    const seedFloor = getPositiveIntegerEnv(
+      "ROBLOX_TARGET_SEED_MIN_ITEM_RAP",
+      DEFAULT_SEED_MIN_ITEM_RAP,
+    );
+
+    const tradeAdSeeds = shuffle(
+      tradeAdItemIds
+        .map((itemId) => dataset.byId.get(String(itemId)))
+        .filter(Boolean)
+        .filter(
+          (item) =>
+            Math.max(Number(item.rap) || 0, Number(item.value) || 0) >=
+            seedFloor,
+        ),
+    );
+
+    const highValueSeeds = shuffle(
+      dataset.items.filter(
+        (item) =>
+          Math.max(Number(item.rap) || 0, Number(item.value) || 0) >=
+          seedFloor,
+      ),
+    );
+
+    const seedItems = takeUniqueItems(
+      [...tradeAdSeeds, ...highValueSeeds],
+      seedItemCount,
+    );
+
+    const ownerPromise = mapWithConcurrency(
+      seedItems,
+      OWNER_CONCURRENCY,
+      async (item) => {
+        try {
+          const result = await getAssetOwners(item.id, {
+            limit: ownersPerItem,
+          });
+          return result.owners;
+        } catch (error) {
+          console.warn(
+            `Limited-owner discovery failed for ${item.name} (${item.id}):`,
+            error,
+          );
+          return [];
+        }
+      },
+    );
+
+    const ownerLists = await withTimeout(
+      ownerPromise,
+      OWNER_DISCOVERY_BUDGET_MS,
+      [],
+    );
+
+    return [
+      ...new Set(
+        ownerLists
+          .flat()
+          .map((owner) => Number(owner?.userId))
+          .filter((userId) => Number.isInteger(userId) && userId > 0),
+      ),
+    ];
+  } catch (error) {
+    console.warn("Rolimon's limited-owner discovery failed:", error);
+    return [];
+  }
+}
+
+function takeUniqueItems(items, limit) {
+  const result = [];
+  const seen = new Set();
+
+  for (const item of items) {
+    const id = Number(item?.id);
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+    seen.add(id);
+    result.push(item);
+    if (result.length >= limit) break;
+  }
+
+  return result;
+}
+
+async function withTimeout(promise, timeoutMs, fallback) {
+  let timeoutId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timeoutId = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function selectSocialExpansionSeeds(limit) {
