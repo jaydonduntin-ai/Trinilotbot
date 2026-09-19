@@ -1,13 +1,14 @@
 import {
   getAvatarThumbnail,
+  getAssetOwners,
   getGameDetails,
   getRobloxUserById,
   getUsersPresence,
-  getAssetOwners,
 } from "../roblox/api.js";
 import { getInventorySummary } from "../roblox/inventory.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
 import { getRolimonsItems } from "../sources/rolimons-items.js";
+import { getRecentTradeAdPlayers } from "../sources/rolimons-trade-ads.js";
 import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
 
@@ -15,14 +16,15 @@ export const DEFAULT_TARGET_RAP = 450_000;
 export const DEFAULT_TARGET_COUNT = 5;
 export const MAX_TARGETS = 7;
 
-const DEFAULT_SEED_ITEM_COUNT = 16;
+const DEFAULT_SEED_ITEM_COUNT = 12;
 const DEFAULT_OWNERS_PER_ITEM = 20;
-const DEFAULT_MAX_CANDIDATES = 180;
-const DEFAULT_MAX_ACTIVE_TO_VERIFY = 60;
+const DEFAULT_MAX_CANDIDATES = 220;
+const DEFAULT_MAX_ACTIVE_TO_VERIFY = 80;
 const DEFAULT_SEED_MIN_ITEM_RAP = 75_000;
 const PRESENCE_BATCH_SIZE = 50;
 const OWNER_CONCURRENCY = 4;
 const VERIFY_CONCURRENCY = 5;
+const OWNER_DISCOVERY_BUDGET_MS = 12_000;
 
 export async function scanDiscoveredTargets({
   minimumRap = getMinimumTargetRap(),
@@ -40,10 +42,11 @@ export async function scanDiscoveredTargets({
       players: [],
       seedItems: discovery.seedItems,
       candidateCount: 0,
+      candidateSourceCounts: discovery.candidateSourceCounts,
       activeCount: 0,
       verifiedCount: 0,
       sources: discovery.sources,
-      skipped: "No owner candidates were returned by the discovery sources.",
+      skipped: "No candidates were returned by the discovery sources.",
     };
   }
 
@@ -59,7 +62,11 @@ export async function scanDiscoveredTargets({
   );
 
   const verifiedPlayers = [];
-  for (let index = 0; index < activePresences.length; index += VERIFY_CONCURRENCY) {
+  for (
+    let index = 0;
+    index < activePresences.length;
+    index += VERIFY_CONCURRENCY
+  ) {
     const batch = activePresences.slice(index, index + VERIFY_CONCURRENCY);
     const batchResults = await Promise.all(
       batch.map((presence) =>
@@ -93,6 +100,7 @@ export async function scanDiscoveredTargets({
     players,
     seedItems: discovery.seedItems,
     candidateCount: discovery.userIds.length,
+    candidateSourceCounts: discovery.candidateSourceCounts,
     activeCount: activePresences.length,
     verifiedCount: verifiedPlayers.length,
     sources: [
@@ -107,7 +115,6 @@ export async function scanDiscoveredTargets({
 }
 
 async function discoverCandidateUserIds(minimumRap) {
-  const dataset = await getRolimonsItems();
   const seedItemCount = getPositiveIntegerEnv(
     "ROBLOX_TARGET_SEED_ITEM_COUNT",
     DEFAULT_SEED_ITEM_COUNT,
@@ -126,28 +133,132 @@ async function discoverCandidateUserIds(minimumRap) {
   );
   const seedFloor = Math.min(configuredSeedFloor, minimumRap);
 
-  const eligible = dataset.items.filter(
-    (item) =>
-      Math.max(Number(item.rap) || 0, Number(item.value) || 0) >= seedFloor,
+  const [tradeAdsResult, itemCatalogResult] = await Promise.allSettled([
+    getRecentTradeAdPlayers(),
+    getRolimonsItems(),
+  ]);
+
+  const sources = [];
+  const candidateSourceCounts = {
+    tradeAds: 0,
+    assetOwners: 0,
+  };
+
+  const tradeAdCandidates =
+    tradeAdsResult.status === "fulfilled"
+      ? shuffle(
+          tradeAdsResult.value.players
+            .map((player) => Number(player.userId))
+            .filter((userId) => Number.isInteger(userId) && userId > 0),
+        )
+      : [];
+
+  if (tradeAdsResult.status === "fulfilled") {
+    sources.push(
+      `Rolimon's recent trade ads (${tradeAdsResult.value.sourceUrl})`,
+    );
+    candidateSourceCounts.tradeAds = new Set(tradeAdCandidates).size;
+  } else {
+    console.warn("Rolimon's trade-ad discovery failed:", tradeAdsResult.reason);
+  }
+
+  let seedItems = [];
+  let ownerCandidates = [];
+
+  if (itemCatalogResult.status === "fulfilled") {
+    const dataset = itemCatalogResult.value;
+    sources.push(
+      `Rolimon's limited catalog (${dataset.sourceUrl ?? "public API"})`,
+    );
+
+    const tradeAdItemIds =
+      tradeAdsResult.status === "fulfilled"
+        ? tradeAdsResult.value.itemIds
+        : [];
+
+    const tradeableSeeds = shuffle(
+      tradeAdItemIds
+        .map((itemId) => dataset.byId.get(String(itemId)))
+        .filter(Boolean)
+        .filter(
+          (item) =>
+            Math.max(Number(item.rap) || 0, Number(item.value) || 0) >=
+            seedFloor,
+        ),
+    );
+
+    const catalogSeeds = shuffle(
+      dataset.items.filter(
+        (item) =>
+          Math.max(Number(item.rap) || 0, Number(item.value) || 0) >=
+          seedFloor,
+      ),
+    );
+
+    seedItems = takeUniqueItems(
+      [...tradeableSeeds, ...catalogSeeds],
+      seedItemCount,
+    );
+
+    const ownerDiscoveryPromise = discoverOwnersFromSeeds(
+      seedItems,
+      ownersPerItem,
+    );
+
+    ownerCandidates = await withTimeout(
+      ownerDiscoveryPromise,
+      OWNER_DISCOVERY_BUDGET_MS,
+      [],
+    );
+
+    if (ownerCandidates.length > 0) {
+      candidateSourceCounts.assetOwners = new Set(ownerCandidates).size;
+      sources.push(
+        process.env.ROBLOX_OWNER_USE_COOKIE === "true" &&
+        process.env.ROBLOX_SESSION_COOKIE
+          ? "Roblox asset owners (authenticated first, public fallback)"
+          : "Roblox public asset owners",
+      );
+    } else {
+      sources.push("Roblox asset owners (no candidates returned this pass)");
+    }
+  } else {
+    console.warn("Rolimon's item catalog discovery failed:", itemCatalogResult.reason);
+  }
+
+  const userIds = roundRobinUnique(
+    [tradeAdCandidates, shuffle(ownerCandidates)],
+    maxCandidates,
   );
 
-  const fallbackPool = [...dataset.items]
-    .sort(
-      (left, right) =>
-        Math.max(Number(right.value) || 0, Number(right.rap) || 0) -
-        Math.max(Number(left.value) || 0, Number(left.rap) || 0),
-    )
-    .slice(0, Math.max(seedItemCount * 4, 40));
+  console.info(
+    `Target discovery: ${candidateSourceCounts.tradeAds} trade-ad candidates, ${candidateSourceCounts.assetOwners} owner candidates, ${userIds.length} unique total.`,
+  );
 
-  const seedPool = eligible.length >= seedItemCount ? eligible : fallbackPool;
-  const seedItems = shuffle(seedPool).slice(0, seedItemCount);
+  return {
+    userIds: shuffle(userIds),
+    seedItems: seedItems.map((item) => ({
+      id: item.id,
+      name: item.name,
+      rap: item.rap,
+      value: item.value,
+    })),
+    candidateSourceCounts,
+    sources,
+  };
+}
+
+async function discoverOwnersFromSeeds(seedItems, ownersPerItem) {
+  if (seedItems.length === 0) return [];
 
   const ownerResults = await mapWithConcurrency(
     seedItems,
     OWNER_CONCURRENCY,
     async (item) => {
       try {
-        const result = await getAssetOwners(item.id, { limit: ownersPerItem });
+        const result = await getAssetOwners(item.id, {
+          limit: ownersPerItem,
+        });
         return { item, owners: result.owners };
       } catch (error) {
         console.warn(
@@ -161,35 +272,20 @@ async function discoverCandidateUserIds(minimumRap) {
 
   const userIds = [];
   const seen = new Set();
+
   for (const result of shuffle(ownerResults)) {
     for (const owner of shuffle(result.owners)) {
       const userId = Number(owner.userId);
       if (!Number.isInteger(userId) || userId <= 0 || seen.has(userId)) {
         continue;
       }
+
       seen.add(userId);
       userIds.push(userId);
-      if (userIds.length >= maxCandidates) break;
     }
-    if (userIds.length >= maxCandidates) break;
   }
 
-  return {
-    userIds: shuffle(userIds),
-    seedItems: seedItems.map((item) => ({
-      id: item.id,
-      name: item.name,
-      rap: item.rap,
-      value: item.value,
-    })),
-    sources: [
-      `Rolimon's limited catalog (${dataset.sourceUrl ?? "public API"})`,
-      process.env.ROBLOX_OWNER_USE_COOKIE === "true" &&
-      process.env.ROBLOX_SESSION_COOKIE
-        ? "Roblox asset owners (authenticated cookie first, public fallback)"
-        : "Roblox public asset owners",
-    ],
-  };
+  return userIds;
 }
 
 async function buildDiscoveredTargetPlayer(presence, minimumRap) {
@@ -364,6 +460,64 @@ async function mapWithConcurrency(items, concurrency, mapper) {
     ),
   );
   return results;
+}
+
+function takeUniqueItems(items, limit) {
+  const result = [];
+  const seen = new Set();
+
+  for (const item of items) {
+    const id = Number(item?.id);
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+    seen.add(id);
+    result.push(item);
+    if (result.length >= limit) break;
+  }
+
+  return result;
+}
+
+function roundRobinUnique(buckets, limit) {
+  const normalized = buckets.map((bucket) => [...bucket]);
+  const result = [];
+  const seen = new Set();
+  let madeProgress = true;
+
+  while (result.length < limit && madeProgress) {
+    madeProgress = false;
+
+    for (const bucket of normalized) {
+      while (bucket.length > 0) {
+        const value = Number(bucket.shift());
+        if (!Number.isInteger(value) || value <= 0 || seen.has(value)) {
+          continue;
+        }
+
+        seen.add(value);
+        result.push(value);
+        madeProgress = true;
+        break;
+      }
+
+      if (result.length >= limit) break;
+    }
+  }
+
+  return result;
+}
+
+async function withTimeout(promise, timeoutMs, fallback) {
+  let timeoutId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timeoutId = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function getPresenceStatus(type) {
