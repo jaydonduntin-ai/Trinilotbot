@@ -17,7 +17,7 @@ export const targetsCommand = {
       option
         .setName("min_value")
         .setDescription(
-          `Minimum collectible value, default ${DEFAULT_TARGET_VALUE.toLocaleString()}.`,
+          "Optional minimum collectible value.",
         )
         .setMinValue(1)
         .setMaxValue(2_000_000_000),
@@ -26,7 +26,7 @@ export const targetsCommand = {
       option
         .setName("min_rap")
         .setDescription(
-          "Optional extra RAP floor. Leave blank for value-only targeting.",
+          `Minimum RAP; defaults to ${DEFAULT_TARGET_RAP.toLocaleString()} when no value floor is supplied.`,
         )
         .setMinValue(1)
         .setMaxValue(2_000_000_000),
