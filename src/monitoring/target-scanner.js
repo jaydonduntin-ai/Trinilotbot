@@ -213,6 +213,8 @@ export async function scanDiscoveredTargets({
   let belowValueCount = 0;
   let rapUnavailableCount = 0;
   let belowRapCount = 0;
+  let profileUnavailableCount = 0;
+  let verificationErrorCount = 0;
   const maxActiveToVerify = getPositiveIntegerEnv(
     "ROBLOX_TARGET_MAX_ACTIVE_TO_VERIFY",
     DEFAULT_MAX_ACTIVE_TO_VERIFY,
@@ -277,7 +279,11 @@ export async function scanDiscoveredTargets({
               `Target verification failed for Roblox user ${presence.userId}:`,
               error,
             );
-            return null;
+            return {
+              qualifies: false,
+              id: Number(presence.userId),
+              reason: "verification-error",
+            };
           }),
         ),
       );
@@ -293,6 +299,10 @@ export async function scanDiscoveredTargets({
           rapUnavailableCount += 1;
         } else if (player?.reason === "below-rap") {
           belowRapCount += 1;
+        } else if (player?.reason === "profile-unavailable") {
+          profileUnavailableCount += 1;
+        } else if (player?.reason === "verification-error") {
+          verificationErrorCount += 1;
         }
       }
     }
@@ -321,6 +331,9 @@ export async function scanDiscoveredTargets({
     belowValueCount,
     rapUnavailableCount,
     belowRapCount,
+    profileUnavailableCount,
+    verificationErrorCount,
+    preRecheckVerifiedCount: verifiedPlayers.length,
     scanElapsedMs: Date.now() - startedAt,
     sources: [
       ...new Set([
@@ -1725,8 +1738,14 @@ async function buildDiscoveredTargetPlayer(
       getRolimonsPlayerSource(userId),
     ]);
 
-  const user = userResult.status === "fulfilled" ? userResult.value : null;
-  if (!user) return null;
+  const user =
+    userResult.status === "fulfilled" && userResult.value
+      ? userResult.value
+      : {
+          id: userId,
+          name: `user-${userId}`,
+          displayName: `Roblox user ${userId}`,
+        };
 
   let inventory =
     inventoryResult.status === "fulfilled" ? inventoryResult.value : null;
@@ -1941,6 +1960,7 @@ async function revalidateCurrentlyInGame(players) {
     .filter((userId) => Number.isInteger(userId) && userId > 0);
 
   const liveCheck = await getPresenceBatched(userIds);
+  const checkedSet = new Set(liveCheck.checkedIds.map(Number));
   const inGameByUserId = new Map(
     liveCheck.presences
       .filter((presence) => Number(presence?.userPresenceType) === 2)
@@ -1948,12 +1968,17 @@ async function revalidateCurrentlyInGame(players) {
   );
 
   return players
-    .filter((player) => inGameByUserId.has(Number(player.id)))
+    .filter((player) => {
+      const userId = Number(player.id);
+      // If the second presence check failed for this user, keep the result from
+      // the successful initial check rather than treating "not checked" as offline.
+      return !checkedSet.has(userId) || inGameByUserId.has(userId);
+    })
     .map((player) => {
       const presence = inGameByUserId.get(Number(player.id));
       return {
         ...player,
-        presenceStatus: "In game",
+        presenceStatus: presence ? "In game" : "In game (initial check)",
         gameName: presence?.lastLocation || player.gameName,
       };
     });
