@@ -45,6 +45,9 @@ const GAME_TARGETS = {
 };
 
 const DEFAULT_MAX_CANDIDATES = 500;
+const DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES = 2_500;
+const DEFAULT_TARGET_SCAN_WAVE_SIZE = 500;
+const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 45_000;
 const DEFAULT_GAME_SCAN_CANDIDATES = 1_200;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 5_000;
@@ -139,7 +142,32 @@ export async function scanDiscoveredTargets({
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
   );
 
-  const discovery = await discoverCandidateUserIds(minimumRap);
+  const maxPresenceCandidates = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_MAX_PRESENCE_CANDIDATES",
+    DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES,
+  );
+  const waveSize = Math.max(
+    50,
+    Math.min(
+      1_000,
+      getPositiveIntegerEnv(
+        "ROBLOX_TARGET_SCAN_WAVE_SIZE",
+        DEFAULT_TARGET_SCAN_WAVE_SIZE,
+      ),
+    ),
+  );
+  const timeBudgetMs = Math.max(
+    10_000,
+    getPositiveIntegerEnv(
+      "ROBLOX_TARGET_SCAN_TIME_BUDGET_MS",
+      DEFAULT_TARGET_SCAN_TIME_BUDGET_MS,
+    ),
+  );
+
+  const discovery = await discoverCandidateUserIds(minimumRap, {
+    maxCandidatesOverride: maxPresenceCandidates,
+  });
+
   if (discovery.userIds.length === 0) {
     return {
       minimumRap,
@@ -149,54 +177,81 @@ export async function scanDiscoveredTargets({
       freshCandidateCount: discovery.freshCandidateCount,
       recentlyCheckedSkipped: discovery.recentlyCheckedSkipped,
       candidateSourceCounts: discovery.candidateSourceCounts,
+      presenceScannedCount: 0,
       activeCount: 0,
       verifiedCount: 0,
       sources: discovery.sources,
-      skipped: "No candidates were returned by the general discovery sources.",
+      skipped: "No candidates were returned by the discovery routes.",
     };
   }
 
-  const presenceScan = await getPresenceBatched(discovery.userIds);
-  markCandidatesChecked(presenceScan.checkedIds);
-
-  const activePresences = shuffle(
-    presenceScan.presences.filter(
-      (presence) => Number(presence.userPresenceType) === 2,
-    ),
-  ).slice(
-    0,
-    getPositiveIntegerEnv(
-      "ROBLOX_TARGET_MAX_ACTIVE_TO_VERIFY",
-      DEFAULT_MAX_ACTIVE_TO_VERIFY,
-    ),
-  );
-
+  const startedAt = Date.now();
   const verifiedPlayers = [];
+  const activeSeen = new Map();
+  let presenceScannedCount = 0;
+  let verificationAttempts = 0;
+  const maxActiveToVerify = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_MAX_ACTIVE_TO_VERIFY",
+    DEFAULT_MAX_ACTIVE_TO_VERIFY,
+  );
+  const verificationBuffer = Math.min(MAX_TARGETS, requestedLimit + 2);
+
   for (
-    let index = 0;
-    index < activePresences.length;
-    index += VERIFY_CONCURRENCY
+    let offset = 0;
+    offset < discovery.userIds.length;
+    offset += waveSize
   ) {
-    const batch = activePresences.slice(index, index + VERIFY_CONCURRENCY);
-    const batchResults = await Promise.all(
-      batch.map((presence) =>
-        buildDiscoveredTargetPlayer(presence, minimumRap).catch((error) => {
-          console.warn(
-            `Target verification failed for Roblox user ${presence.userId}:`,
-            error,
-          );
-          return null;
-        }),
-      ),
+    if (Date.now() - startedAt >= timeBudgetMs) break;
+    if (verifiedPlayers.length >= verificationBuffer) break;
+    if (verificationAttempts >= maxActiveToVerify) break;
+
+    const wave = discovery.userIds.slice(offset, offset + waveSize);
+    const presenceScan = await getPresenceBatched(wave);
+    markCandidatesChecked(presenceScan.checkedIds);
+    presenceScannedCount += presenceScan.checkedIds.length;
+
+    const inGamePresences = presenceScan.presences.filter(
+      (presence) => Number(presence?.userPresenceType) === 2,
     );
 
-    for (const player of batchResults) {
-      if (player?.qualifies) {
-        verifiedPlayers.push(player);
-      }
+    for (const presence of inGamePresences) {
+      activeSeen.set(Number(presence.userId), presence);
     }
 
-    if (verifiedPlayers.length >= requestedLimit) break;
+    const remainingVerifyBudget =
+      maxActiveToVerify - verificationAttempts;
+    const activeWave = inGamePresences.slice(0, remainingVerifyBudget);
+    verificationAttempts += activeWave.length;
+
+    for (
+      let index = 0;
+      index < activeWave.length;
+      index += VERIFY_CONCURRENCY
+    ) {
+      if (Date.now() - startedAt >= timeBudgetMs) break;
+      if (verifiedPlayers.length >= verificationBuffer) break;
+
+      const batch = activeWave.slice(index, index + VERIFY_CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map((presence) =>
+          buildDiscoveredTargetPlayer(presence, minimumRap).catch(
+            (error) => {
+              console.warn(
+                `Target verification failed for Roblox user ${presence.userId}:`,
+                error,
+              );
+              return null;
+            },
+          ),
+        ),
+      );
+
+      for (const player of batchResults) {
+        if (player?.qualifies) {
+          verifiedPlayers.push(player);
+        }
+      }
+    }
   }
 
   const stillInGamePlayers = await revalidateCurrentlyInGame(
@@ -213,8 +268,11 @@ export async function scanDiscoveredTargets({
     freshCandidateCount: discovery.freshCandidateCount,
     recentlyCheckedSkipped: discovery.recentlyCheckedSkipped,
     candidateSourceCounts: discovery.candidateSourceCounts,
-    activeCount: activePresences.length,
+    presenceScannedCount,
+    activeCount: activeSeen.size,
     verifiedCount: stillInGamePlayers.length,
+    verificationAttempts,
+    scanElapsedMs: Date.now() - startedAt,
     sources: [
       ...new Set([
         ...discovery.sources,
@@ -1483,6 +1541,13 @@ async function buildDiscoveredTargetPlayer(presence, minimumRap) {
     rolimons,
   );
 
+  const candidate = candidatePool.get(userId);
+  if (candidate) {
+    candidate.lastKnownRap =
+      typeof rapValue === "number" ? rapValue : null;
+    candidate.lastKnownRapAt = Date.now();
+  }
+
   if (typeof rapValue !== "number" || rapValue < minimumRap) {
     return { qualifies: false, id: userId };
   }
@@ -1712,6 +1777,13 @@ function getCandidatePriority(candidate) {
   const sources = candidate?.sources ?? new Set();
   let score = 0;
 
+  if (
+    Number.isFinite(Number(candidate?.lastKnownRap)) &&
+    Number(candidate.lastKnownRap) >= DEFAULT_TARGET_RAP
+  ) {
+    score += 250;
+  }
+
   const weights = new Map([
     ["Rolimon's value leaderboard", 120],
     [
@@ -1730,9 +1802,10 @@ function getCandidatePriority(candidate) {
   ]);
 
   for (const source of sources) {
-    score = Math.max(score, weights.get(source) ?? 10);
+    score += weights.get(source) ?? 10;
   }
 
+  score += Math.max(0, sources.size - 1) * 15;
   return score;
 }
 
@@ -1751,6 +1824,8 @@ function addCandidatesToPool(userIds, source, now = Date.now()) {
       lastGroupExpandedAt: 0,
       lastFriendGroupExpandedAt: 0,
       lastPrimaryGroupExpandedAt: 0,
+      lastKnownRap: null,
+      lastKnownRapAt: 0,
       sources: new Set(),
     };
 
