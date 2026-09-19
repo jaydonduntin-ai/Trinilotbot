@@ -66,7 +66,7 @@ Discord-to-Roblox example:
 
 ## Deployment caveat
 
-`data/alert-subscribers.json` and `data/scan-watchlist.json` are local file storage. On Railway or other hosts with ephemeral filesystems, they may reset after a restart/deploy unless a persistent volume is mounted at `/app/data`.
+`data/alert-subscribers.json`, `data/scan-watchlist.json`, and `data/target-history.json` are local file storage. On Railway, attach a persistent volume to this service (recommended mount path `/app/data` or `/data`). Railway provides `RAILWAY_VOLUME_MOUNT_PATH` automatically; the bot detects it at runtime and stores the scan watchlist plus `/target`/`/scan` dedupe history on that volume. Explicit `ROBLOX_SCAN_WATCHLIST_PATH` and `ROBLOX_TARGET_HISTORY_PATH` overrides remain available.
 
 
 Railway can deploy this repository directly with the root `Dockerfile`; its command is `npm start`. Keep the existing environment variables unchanged. A health-check URL is not required because this is a Discord worker rather than an HTTP service.
