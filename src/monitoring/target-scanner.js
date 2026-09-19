@@ -190,6 +190,8 @@ export async function scanDiscoveredTargets({
   const activeSeen = new Map();
   let presenceScannedCount = 0;
   let verificationAttempts = 0;
+  let rapUnavailableCount = 0;
+  let belowThresholdCount = 0;
   const maxActiveToVerify = getPositiveIntegerEnv(
     "ROBLOX_TARGET_MAX_ACTIVE_TO_VERIFY",
     DEFAULT_MAX_ACTIVE_TO_VERIFY,
@@ -259,6 +261,10 @@ export async function scanDiscoveredTargets({
       for (const player of batchResults) {
         if (player?.qualifies) {
           verifiedPlayers.push(player);
+        } else if (player?.reason === "rap-unavailable") {
+          rapUnavailableCount += 1;
+        } else if (player?.reason === "below-threshold") {
+          belowThresholdCount += 1;
         }
       }
     }
@@ -282,6 +288,8 @@ export async function scanDiscoveredTargets({
     activeCount: activeSeen.size,
     verifiedCount: stillInGamePlayers.length,
     verificationAttempts,
+    rapUnavailableCount,
+    belowThresholdCount,
     scanElapsedMs: Date.now() - startedAt,
     sources: [
       ...new Set([
@@ -1326,14 +1334,39 @@ async function refreshRolimonsLeaderboardCandidates() {
     },
   );
 
-  return [
+  const players = results.flat();
+  const userIds = [
     ...new Set(
-      results
-        .flat()
+      players
         .map((player) => Number(player?.userId))
         .filter((userId) => Number.isInteger(userId) && userId > 0),
     ),
   ];
+
+  addCandidatesToPool(
+    userIds,
+    "Rolimon's value leaderboard",
+    Date.now(),
+  );
+
+  for (const player of players) {
+    const userId = Number(player?.userId);
+    const candidate = candidatePool.get(userId);
+    if (!candidate) continue;
+
+    if (Number.isFinite(Number(player?.totalRAP))) {
+      candidate.lastKnownRap = Number(player.totalRAP);
+      candidate.lastKnownRapAt = Date.now();
+      candidate.lastKnownRapSource =
+        "Rolimon's value leaderboard";
+    }
+
+    if (Number.isFinite(Number(player?.totalValue))) {
+      candidate.lastKnownValue = Number(player.totalValue);
+    }
+  }
+
+  return userIds;
 }
 
 function nextLeaderboardPages(count) {
@@ -1546,20 +1579,43 @@ async function buildDiscoveredTargetPlayer(presence, minimumRap) {
   const rolimons =
     rolimonsResult.status === "fulfilled" ? rolimonsResult.value : null;
 
-  const { rapValue, rapSource, rapIsPartial } = chooseRapSource(
+  const candidate = candidatePool.get(userId);
+  let { rapValue, rapSource, rapIsPartial } = chooseRapSource(
     inventory,
     rolimons,
   );
 
-  const candidate = candidatePool.get(userId);
-  if (candidate) {
-    candidate.lastKnownRap =
-      typeof rapValue === "number" ? rapValue : null;
-    candidate.lastKnownRapAt = Date.now();
+  if (
+    typeof rapValue !== "number" &&
+    Number.isFinite(Number(candidate?.lastKnownRap))
+  ) {
+    rapValue = Number(candidate.lastKnownRap);
+    rapSource =
+      candidate.lastKnownRapSource ??
+      "Rolimon's value leaderboard";
+    rapIsPartial = false;
   }
 
-  if (typeof rapValue !== "number" || rapValue < minimumRap) {
-    return { qualifies: false, id: userId };
+  if (candidate && typeof rapValue === "number") {
+    candidate.lastKnownRap = rapValue;
+    candidate.lastKnownRapAt = Date.now();
+    candidate.lastKnownRapSource = rapSource;
+  }
+
+  if (typeof rapValue !== "number") {
+    return {
+      qualifies: false,
+      id: userId,
+      reason: "rap-unavailable",
+    };
+  }
+
+  if (rapValue < minimumRap) {
+    return {
+      qualifies: false,
+      id: userId,
+      reason: "below-threshold",
+    };
   }
 
   let gameName = presence.lastLocation ?? "Online";
@@ -1599,7 +1655,11 @@ async function buildDiscoveredTargetPlayer(presence, minimumRap) {
     rapSource,
     rapIsPartial,
     totalValue:
-      typeof rolimons?.totalValue === "number" ? rolimons.totalValue : null,
+      typeof rolimons?.totalValue === "number"
+        ? rolimons.totalValue
+        : Number.isFinite(Number(candidate?.lastKnownValue))
+          ? Number(candidate.lastKnownValue)
+          : null,
     premiumStatus: rolimons?.premiumStatus ?? "Unavailable",
     gameValue,
     topLimiteds: getTopLimiteds(inventory),
@@ -1701,16 +1761,46 @@ async function getPresenceBatched(userIds) {
 
   for (let index = 0; index < userIds.length; index += PRESENCE_BATCH_SIZE) {
     const batch = userIds.slice(index, index + PRESENCE_BATCH_SIZE);
-    try {
-      const result = await getUsersPresence(batch);
-      presences.push(...result);
-      checkedIds.push(...batch);
-    } catch (error) {
-      console.warn("Roblox presence batch failed:", error);
+    let success = false;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const result = await getUsersPresence(batch);
+        presences.push(...result);
+        checkedIds.push(...batch);
+        success = true;
+        break;
+      } catch (error) {
+        const status = Number(error?.status);
+        const retryable =
+          status === 429 ||
+          status === 408 ||
+          status >= 500;
+
+        if (!retryable || attempt >= 3) {
+          console.warn("Roblox presence batch failed:", error);
+          break;
+        }
+
+        const delayMs = 400 * 2 ** attempt;
+        console.warn(
+          `Roblox presence batch throttled/unavailable (HTTP ${status || "?"}); retrying in ${delayMs}ms.`,
+        );
+        await sleep(delayMs);
+      }
+    }
+
+    // Avoid bursting dozens of presence requests back-to-back.
+    if (success && index + PRESENCE_BATCH_SIZE < userIds.length) {
+      await sleep(120);
     }
   }
 
   return { presences, checkedIds };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function getPoolSourceCounts() {
@@ -1836,6 +1926,8 @@ function addCandidatesToPool(userIds, source, now = Date.now()) {
       lastPrimaryGroupExpandedAt: 0,
       lastKnownRap: null,
       lastKnownRapAt: 0,
+      lastKnownRapSource: null,
+      lastKnownValue: null,
       sources: new Set(),
     };
 
