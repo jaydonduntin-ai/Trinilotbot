@@ -6,6 +6,7 @@ const THUMBNAILS_API_URL = "https://thumbnails.roblox.com";
 const INVENTORY_API_URL = "https://inventory.roblox.com";
 const FRIENDS_API_URL = "https://friends.roblox.com";
 const ACCOUNT_INFORMATION_API_URL = "https://accountinformation.roblox.com";
+const GROUPS_API_URL = "https://groups.roblox.com";
 
 export class RobloxApiError extends Error {
   constructor(message, status) {
@@ -102,6 +103,101 @@ export async function searchRobloxUsers(
     users: Array.isArray(payload?.data) ? payload.data : [],
     nextPageCursor: payload?.nextPageCursor ?? null,
   };
+}
+
+export async function searchRobloxGroups(
+  keyword,
+  { limit = 10, cursor = null } = {},
+) {
+  const normalizedKeyword = String(keyword ?? "").trim();
+  if (!normalizedKeyword) {
+    return { groups: [], nextPageCursor: null };
+  }
+
+  const requestedLimit = [10, 25, 50, 100].includes(Number(limit))
+    ? Number(limit)
+    : 10;
+  const cursorQuery = cursor
+    ? `&cursor=${encodeURIComponent(cursor)}`
+    : "";
+
+  const payload = await fetchRobloxJson(
+    `${GROUPS_API_URL}/v1/groups/search?keyword=${encodeURIComponent(
+      normalizedKeyword,
+    )}&limit=${requestedLimit}${cursorQuery}`,
+  );
+
+  return {
+    groups: Array.isArray(payload?.data) ? payload.data : [],
+    nextPageCursor: payload?.nextPageCursor ?? null,
+  };
+}
+
+export async function getRobloxGroupUsers(
+  groupId,
+  { limit = 100, cursor = null } = {},
+) {
+  const normalizedId = Number(groupId);
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    return { users: [], nextPageCursor: null };
+  }
+
+  const requestedLimit = [10, 25, 50, 100].includes(Number(limit))
+    ? Number(limit)
+    : 100;
+  const cursorQuery = cursor
+    ? `&cursor=${encodeURIComponent(cursor)}`
+    : "";
+
+  const payload = await fetchRobloxJson(
+    `${GROUPS_API_URL}/v1/groups/${encodeURIComponent(
+      normalizedId,
+    )}/users?sortOrder=Asc&limit=${requestedLimit}${cursorQuery}`,
+  );
+
+  const users = (payload?.data ?? [])
+    .map((entry) => {
+      const raw = entry?.user ?? entry;
+      const id = Number(raw?.userId ?? raw?.id);
+      if (!Number.isInteger(id) || id <= 0) return null;
+      return {
+        id,
+        name: raw?.username ?? raw?.name ?? null,
+        displayName: raw?.displayName ?? raw?.display_name ?? null,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    users,
+    nextPageCursor: payload?.nextPageCursor ?? null,
+  };
+}
+
+export async function getUserRobloxGroups(userId) {
+  const normalizedId = Number(userId);
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    return [];
+  }
+
+  const payload = await fetchRobloxJson(
+    `${GROUPS_API_URL}/v1/users/${encodeURIComponent(
+      normalizedId,
+    )}/groups/roles`,
+  );
+
+  return (payload?.data ?? [])
+    .map((entry) => {
+      const group = entry?.group ?? entry;
+      const id = Number(group?.id ?? group?.groupId);
+      if (!Number.isInteger(id) || id <= 0) return null;
+      return {
+        id,
+        name: group?.name ?? null,
+        memberCount: Number(group?.memberCount) || null,
+      };
+    })
+    .filter(Boolean);
 }
 
 export async function getUserFriends(userId) {
