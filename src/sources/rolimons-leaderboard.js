@@ -47,22 +47,57 @@ function parseLeaderboardPlayers(html) {
   const players = [];
   const seen = new Set();
 
-  // The leaderboard cards contain nested markup, so relying on the username
-  // being the first text node after <a> is fragile. The player ID in the
-  // canonical /player/{id} link is the stable part we actually need.
+  // Each leaderboard row links to /player/{id} and visibly contains Value/RAP.
+  // Parse the stable player ID, then read the nearby public row text so the
+  // target scanner can use leaderboard RAP even if per-player info is blocked.
   const linkPattern = /href=["']\/player\/(\d+)(?:["'/?#])/gi;
-  let match;
+  const matches = [...html.matchAll(linkPattern)];
 
-  while ((match = linkPattern.exec(html)) !== null) {
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
     const userId = Number(match[1]);
 
     if (!Number.isInteger(userId) || userId <= 0 || seen.has(userId)) {
       continue;
     }
 
+    const segmentStart = match.index ?? 0;
+    const segmentEnd =
+      index + 1 < matches.length
+        ? matches[index + 1].index
+        : Math.min(html.length, segmentStart + 5000);
+    const rowText = stripHtml(html.slice(segmentStart, segmentEnd));
+
+    const valueMatch = rowText.match(
+      /Value\s*R\$?\s*([\d,]+)/i,
+    );
+    const rapMatch = rowText.match(
+      /RAP\s*R\$?\s*([\d,]+)/i,
+    );
+
     seen.add(userId);
-    players.push({ userId, username: null });
+    players.push({
+      userId,
+      username: null,
+      totalValue: parseNumber(valueMatch?.[1]),
+      totalRAP: parseNumber(rapMatch?.[1]),
+    });
   }
 
   return players;
+}
+
+function stripHtml(value) {
+  return String(value)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ");
+}
+
+function parseNumber(value) {
+  const number = Number(String(value ?? "").replace(/,/g, ""));
+  return Number.isFinite(number) && number >= 0 ? number : null;
 }
