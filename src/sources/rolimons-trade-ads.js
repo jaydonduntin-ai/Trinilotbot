@@ -8,6 +8,7 @@ const ENDPOINTS = [
 let cache = {
   expiresAt: 0,
   players: [],
+  itemIds: [],
   sourceUrl: null,
 };
 
@@ -21,14 +22,14 @@ export async function getRecentTradeAdPlayers({ force = false } = {}) {
   for (const endpoint of ENDPOINTS) {
     try {
       const payload = await fetchJson(endpoint);
-      const players = normalizeTradeAdPlayers(payload);
-      if (players.length === 0) {
+      const normalized = normalizeTradeAds(payload);
+      if (normalized.players.length === 0) {
         throw new Error("Rolimon's returned no recent trade-ad players.");
       }
 
       cache = {
         expiresAt: now + CACHE_TTL_MS,
-        players,
+        ...normalized,
         sourceUrl: endpoint,
       };
       return cache;
@@ -44,7 +45,7 @@ export async function getRecentTradeAdPlayers({ force = false } = {}) {
   throw lastError ?? new Error("Rolimon's recent trade ads are unavailable.");
 }
 
-function normalizeTradeAdPlayers(payload) {
+function normalizeTradeAds(payload) {
   const ads =
     payload?.trade_ads ??
     payload?.tradeAds ??
@@ -52,10 +53,14 @@ function normalizeTradeAdPlayers(payload) {
     payload?.data ??
     [];
 
-  if (!Array.isArray(ads)) return [];
+  if (!Array.isArray(ads)) {
+    return { players: [], itemIds: [] };
+  }
 
   const players = [];
-  const seen = new Set();
+  const itemIds = [];
+  const seenPlayers = new Set();
+  const seenItems = new Set();
 
   for (const ad of ads) {
     const userId = Number(
@@ -67,18 +72,45 @@ function normalizeTradeAdPlayers(payload) {
       ? ad[3]
       : ad?.username ?? ad?.user_name ?? ad?.player_name ?? null;
 
-    if (!Number.isInteger(userId) || userId <= 0 || seen.has(userId)) {
-      continue;
+    if (Number.isInteger(userId) && userId > 0 && !seenPlayers.has(userId)) {
+      seenPlayers.add(userId);
+      players.push({
+        userId,
+        username: username ? String(username) : null,
+      });
     }
 
-    seen.add(userId);
-    players.push({
-      userId,
-      username: username ? String(username) : null,
-    });
+    const offer = Array.isArray(ad)
+      ? ad[4]
+      : ad?.offer ?? ad?.offering ?? ad?.offering_items;
+    const request = Array.isArray(ad)
+      ? ad[5]
+      : ad?.request ?? ad?.requesting ?? ad?.requesting_items;
+
+    for (const itemId of [
+      ...extractItemIds(offer),
+      ...extractItemIds(request),
+    ]) {
+      if (!seenItems.has(itemId)) {
+        seenItems.add(itemId);
+        itemIds.push(itemId);
+      }
+    }
   }
 
-  return players;
+  return { players, itemIds };
+}
+
+function extractItemIds(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : value?.items ?? value?.item_ids ?? value?.itemIds ?? [];
+
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((item) => Number(item?.id ?? item?.assetId ?? item))
+    .filter((itemId) => Number.isInteger(itemId) && itemId > 0);
 }
 
 async function fetchJson(url) {
