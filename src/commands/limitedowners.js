@@ -49,8 +49,9 @@ export const limitedOwnersCommand = {
     const limit = interaction.options.getInteger("limit") ?? DEFAULT_LIMIT;
     await interaction.deferReply();
 
+    let item = null;
     try {
-      const item = await findRolimonsItem(query);
+      item = await findRolimonsItem(query);
       if (!item) {
         await interaction.editReply(`No Rolimon's limited matched **${escapeMarkdown(query)}**.`);
         return;
@@ -116,9 +117,31 @@ export const limitedOwnersCommand = {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error("Could not load limited owners:", error);
-      await interaction.editReply(
-        "Limited-owner lookup is temporarily unavailable. Please try again later.",
-      );
+
+      const status = Number(error?.status);
+      const stage = item
+        ? "Roblox public owner lookup"
+        : "Rolimon's item lookup";
+      const detail =
+        Number.isInteger(status) && status > 0
+          ? ` (HTTP ${status})`
+          : "";
+
+      await interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x2f3136)
+            .setTitle(item?.name ?? "Limited-owner lookup")
+            .setURL(item?.rolimonsUrl ?? null)
+            .setDescription(
+              `${stage} failed${detail}. No owner data was fabricated. Try the command again later or use a different limited item.`,
+            )
+            .setFooter({
+              text: "Item matching uses Rolimon's. Owner enumeration uses Roblox's public inventory endpoint.",
+            })
+            .setTimestamp(),
+        ],
+      });
     }
   },
 };
