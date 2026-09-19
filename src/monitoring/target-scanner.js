@@ -21,7 +21,7 @@ import {
   searchRobloxUsers,
 } from "../roblox/api.js";
 import { getInventorySummary } from "../roblox/inventory.js";
-import { getFollowUserJoinUrl, getPublicJoinUrl } from "../roblox/game-session.js";
+import { getFollowUserJoinUrl } from "../roblox/game-session.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
 import {
   enrichInventoryWithRolimons,
@@ -95,9 +95,11 @@ const ROLIMONS_SEARCH_TERMS_PER_REFRESH = 6;
 const ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const JAILBREAK_TRADE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 20;
-const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 60 * 1000;
-const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 3 * 60 * 1000;
-const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 750;
+const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 2 * 60 * 1000;
+const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 400;
+const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 900;
+const DEFAULT_TARGET_LIVE_CACHE_BACKOFF_MS = 3 * 60 * 1000;
 const GROUP_SEARCH_TERMS_PER_REFRESH = 3;
 const GROUPS_PER_SEARCH_TERM = 2;
 const GROUP_MEMBERSHIP_SEEDS_PER_REFRESH = 4;
@@ -149,6 +151,7 @@ let targetPoolWarmupTimer = null;
 let targetLiveCacheTimer = null;
 let liveTargetCursor = 0;
 let lastLiveCacheRefreshAt = 0;
+let liveCacheBackoffUntil = 0;
 let searchTermCursor = 0;
 let groupSearchTermCursor = 0;
 let leaderboardPageCursor = 1;
@@ -233,6 +236,17 @@ export function startTargetCandidatePoolWarmup() {
 export async function refreshTargetLiveCache() {
   await syncWatchlistCandidates();
 
+  const now = Date.now();
+  if (now < liveCacheBackoffUntil) {
+    pruneLiveTargetCache(now);
+    return {
+      verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
+      checkedCount: 0,
+      liveCount: liveTargetCache.size,
+      backingOff: true,
+    };
+  }
+
   const minimumRap = getMinimumTargetRap();
   const scanLimit = Math.max(
     50,
@@ -248,7 +262,6 @@ export async function refreshTargetLiveCache() {
     "ROBLOX_TARGET_LIVE_CACHE_TTL_MS",
     DEFAULT_TARGET_LIVE_CACHE_TTL_MS,
   );
-  const now = Date.now();
 
   const verifiedCandidates = [...candidatePool.values()]
     .filter(
@@ -330,9 +343,11 @@ export async function refreshTargetLiveCache() {
 
   const presenceScan = await getPresenceBatched(selectedIds, {
     batchSize: PRESENCE_BATCH_SIZE,
-    maxAttempts: 3,
-    interBatchDelayMs: 100,
-    fallbackFetcher: getUsersPresenceFallback,
+    maxAttempts: 1,
+    interBatchDelayMs: getPositiveIntegerEnv(
+      "ROBLOX_TARGET_LIVE_CACHE_BATCH_DELAY_MS",
+      DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS,
+    ),
   });
   const checked = new Set(presenceScan.checkedIds.map(Number));
   const presenceById = new Map(
@@ -355,6 +370,22 @@ export async function refreshTargetLiveCache() {
     }
   }
 
+  const completionRatio =
+    selectedIds.length > 0 ? checked.size / selectedIds.length : 1;
+  if (selectedIds.length >= 50 && completionRatio < 0.5) {
+    liveCacheBackoffUntil =
+      Date.now() +
+      getPositiveIntegerEnv(
+        "ROBLOX_TARGET_LIVE_CACHE_BACKOFF_MS",
+        DEFAULT_TARGET_LIVE_CACHE_BACKOFF_MS,
+      );
+    console.warn(
+      `Target live cache backing off after low presence completion: ${checked.size}/${selectedIds.length}.`,
+    );
+  } else {
+    liveCacheBackoffUntil = 0;
+  }
+
   pruneLiveTargetCache(now, ttlMs);
   lastLiveCacheRefreshAt = now;
 
@@ -362,6 +393,7 @@ export async function refreshTargetLiveCache() {
     verifiedIndexCount: verifiedIds.length,
     checkedCount: checked.size,
     liveCount: liveTargetCache.size,
+    backingOff: liveCacheBackoffUntil > Date.now(),
   };
 }
 
@@ -2466,7 +2498,7 @@ async function buildDiscoveredTargetPlayer(
         console.warn(`Could not load target game ${presence.universeId}:`, error);
       }
     }
-    const joinability = await buildTargetJoinability(presence, userId);
+    const joinability = buildTargetJoinability(presence, userId);
 
     return {
       qualifies: true,
@@ -2618,7 +2650,7 @@ async function buildDiscoveredTargetPlayer(
     }
   }
 
-  const joinability = await buildTargetJoinability(presence, userId);
+  const joinability = buildTargetJoinability(presence, userId);
 
   const gameValueResult = await Promise.allSettled([
     scanGameValue({
@@ -2655,30 +2687,25 @@ async function buildDiscoveredTargetPlayer(
   };
 }
 
-async function buildTargetJoinability(presence, userId) {
+function buildTargetJoinability(presence, userId) {
   const normalizedUserId = Number(userId);
   const placeId = Number(presence?.placeId);
   const gameId = presence?.gameId ? String(presence.gameId) : null;
-
   const followJoinUrl = getFollowUserJoinUrl(normalizedUserId);
 
-  let exactJoinUrl = null;
-  if (Number.isInteger(placeId) && placeId > 0 && gameId) {
-    exactJoinUrl = await getPublicJoinUrl(presence);
-  }
-
+  // /target uses the profile-follow join route that mirrors the Join button
+  // users see on Roblox profiles. Do not paginate public server lists here:
+  // that made target verification slow and contributed unnecessary API load.
   return {
     placeId: Number.isInteger(placeId) && placeId > 0 ? placeId : null,
     gameId,
     followJoinUrl,
-    exactJoinUrl,
+    exactJoinUrl: null,
     joinReady: Boolean(followJoinUrl),
-    publicServerConfirmed: Boolean(exactJoinUrl),
-    joinabilityStatus: exactJoinUrl
-      ? "Public server confirmed"
-      : followJoinUrl
-        ? "Profile follow-join available"
-        : "Unavailable",
+    publicServerConfirmed: false,
+    joinabilityStatus: followJoinUrl
+      ? "Profile follow-join available"
+      : "Unavailable",
   };
 }
 
