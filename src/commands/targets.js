@@ -88,6 +88,9 @@ function buildTargetEmbeds(result) {
     .setTitle("Automatic Roblox discovery")
     .setDescription(
       [
+        `Verified 450k+ index: ${result.verifiedIndexCount ?? 0}`,
+        `Live cache: ${result.liveCacheSize ?? 0}`,
+        `Live-cache hit: ${result.liveCacheHit ? "Yes" : "No — broadened search"}`,
         `Candidate pool: ${result.candidatePoolSize ?? result.candidateCount ?? 0}`,
         `Candidates selected: ${result.candidateCount ?? 0}`,
         `Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
@@ -129,7 +132,7 @@ function buildTargetEmbeds(result) {
       inline: false,
     })
     .setFooter({
-      text: "Discovery uses multiple public sources. Results are rechecked against Roblox current InGame presence before display.",
+      text: "The verified RAP index and live cache run continuously. /target final-checks Roblox presence before display.",
     })
     .setTimestamp();
 
