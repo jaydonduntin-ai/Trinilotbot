@@ -74,7 +74,7 @@ async function checkScanWatchlist(client) {
 
 async function publishScanAlert(client, entry) {
   const profile = await getRobloxProfile(
-    entry.username || String(entry.userId),
+    String(entry.userId),
   ).catch(() => null);
 
   const profileUrl =
