@@ -72,9 +72,11 @@ function buildTargetEmbeds(result) {
     .setTitle("Automatic Roblox discovery")
     .setDescription(
       [
-        `Unique candidates: ${result.candidateCount ?? 0}`,
-        `Rolimon's trade-ad candidates: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
-        `Roblox asset-owner candidates: ${result.candidateSourceCounts?.assetOwners ?? 0}`,
+        `Candidate pool: ${result.candidatePoolSize ?? result.candidateCount ?? 0}`,
+        `Fresh candidates scanned: ${result.freshCandidateCount ?? result.candidateCount ?? 0}`,
+        `Cooling down from recent scans: ${result.recentlyCheckedSkipped ?? 0}`,
+        `Rolimon's trade-ad candidates this refresh: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
+        `Roblox asset-owner candidates this refresh: ${result.candidateSourceCounts?.assetOwners ?? 0}`,
         `Active candidates checked: ${result.activeCount ?? 0}`,
         `RAP threshold: ${result.minimumRap.toLocaleString()}`,
         seedPreview ? `Seed limiteds: ${truncate(seedPreview, 900)}` : null,
