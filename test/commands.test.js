@@ -12,8 +12,7 @@ test("all slash commands are registered", () => {
     "dc2rb",
     "alerts",
     "target",
-    "rbx2mm2",
-    "rbx2adm",
+    "scan",
   ]);
 
   for (const command of commandModules) {

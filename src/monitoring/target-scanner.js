@@ -321,7 +321,7 @@ export async function scanDiscoveredTargets({
   return {
     minimumValue,
     minimumRap,
-    players: shuffle(stillInGamePlayers)
+    players: shuffle(stillInGamePlayers.players)
       .slice(0, requestedLimit)
       .map(({ qualifies, ...player }) => player),
     candidateCount: discovery.userIds.length,
@@ -331,7 +331,9 @@ export async function scanDiscoveredTargets({
     candidateSourceCounts: discovery.candidateSourceCounts,
     presenceScannedCount,
     activeCount: activeSeen.size,
-    verifiedCount: stillInGamePlayers.length,
+    verifiedCount: stillInGamePlayers.players.length,
+    finalPresenceLeftGameCount: stillInGamePlayers.leftGameCount,
+    finalPresenceUnavailableCount: stillInGamePlayers.unavailableCount,
     verificationAttempts,
     valueUnavailableCount,
     belowValueCount,
@@ -358,10 +360,19 @@ export async function scanCandidatesForWatchlist({
   limit = 25,
 } = {}) {
   const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 25));
+  // /scan is for expanding the verified pool. Do not spend the pass
+  // re-verifying users that are already on the watchlist.
+  const watchedIds = new Set(
+    (await getScanWatchlist())
+      .map((entry) => Number(entry?.userId))
+      .filter((userId) => Number.isInteger(userId) && userId > 0),
+  );
+
   const discovery = await discoverCandidateUserIds({
     minimumValue,
     minimumRap,
     respectCooldown: false,
+    excludeUserIds: watchedIds,
     maxCandidatesOverride: getPositiveIntegerEnv(
       "ROBLOX_TARGET_MAX_PRESENCE_CANDIDATES",
       DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES,
@@ -379,16 +390,7 @@ export async function scanCandidatesForWatchlist({
   const verified = [];
   let checkedCount = 0;
 
-  // /scan is for expanding the verified pool. Do not spend the pass
-  // re-verifying users that are already on the watchlist.
-  const watchedIds = new Set(
-    (await getScanWatchlist())
-      .map((entry) => Number(entry?.userId))
-      .filter((userId) => Number.isInteger(userId) && userId > 0),
-  );
-
   const candidates = discovery.userIds
-    .filter((userId) => !watchedIds.has(Number(userId)))
     .sort((leftId, rightId) =>
       getCandidatePriority(
         candidatePool.get(Number(rightId)),
@@ -442,7 +444,7 @@ export async function scanCandidatesForWatchlist({
     minimumRap,
     minimumValue,
     checkedCount,
-    alreadyWatchedSkipped: watchedIds.size,
+    alreadyWatchedSkipped: discovery.excludedCandidateCount,
     candidatePoolSize: discovery.candidatePoolSize,
     candidateSourceCounts: discovery.candidateSourceCounts,
     scanElapsedMs: Date.now() - startedAt,
@@ -865,6 +867,7 @@ async function discoverCandidateUserIds({
   minimumValue = null,
   minimumRap = null,
   respectCooldown = true,
+  excludeUserIds = null,
   maxCandidatesOverride = null,
 } = {}) {
   const maxCandidates =
@@ -888,6 +891,7 @@ async function discoverCandidateUserIds({
     respectCooldown,
     minimumValue,
     minimumRap,
+    excludeUserIds,
   });
 
   return {
@@ -896,6 +900,7 @@ async function discoverCandidateUserIds({
     candidatePoolSize: candidatePool.size,
     freshCandidateCount: selection.freshCount,
     recentlyCheckedSkipped: selection.recentlyCheckedSkipped,
+    excludedCandidateCount: selection.excludedCandidateCount,
     sources: [
       "Verified /scan RAP watchlist",
       "Roblox public limited owners",
@@ -2150,7 +2155,7 @@ function getTopLimiteds(inventory) {
 
 async function revalidateCurrentlyInGame(players) {
   if (!Array.isArray(players) || players.length === 0) {
-    return [];
+    return { players: [], leftGameCount: 0, unavailableCount: 0 };
   }
 
   const userIds = players
@@ -2162,7 +2167,7 @@ async function revalidateCurrentlyInGame(players) {
   let liveCheck = await getPresenceBatched(userIds);
 
   // Retry only users whose final presence could not be checked.
-  const checked = new Set(liveCheck.checkedIds.map(Number));
+  let checked = new Set(liveCheck.checkedIds.map(Number));
   const missedIds = userIds.filter((userId) => !checked.has(userId));
   if (missedIds.length > 0) {
     await sleep(350);
@@ -2171,6 +2176,7 @@ async function revalidateCurrentlyInGame(players) {
       presences: [...liveCheck.presences, ...retry.presences],
       checkedIds: [...liveCheck.checkedIds, ...retry.checkedIds],
     };
+    checked = new Set(liveCheck.checkedIds.map(Number));
   }
 
   const inGameByUserId = new Map(
@@ -2179,7 +2185,7 @@ async function revalidateCurrentlyInGame(players) {
       .map((presence) => [Number(presence.userId), presence]),
   );
 
-  return players
+  const confirmedPlayers = players
     .filter((player) => inGameByUserId.has(Number(player.id)))
     .map((player) => {
       const presence = inGameByUserId.get(Number(player.id));
@@ -2190,9 +2196,24 @@ async function revalidateCurrentlyInGame(players) {
         presenceVerifiedAt: Date.now(),
       };
     });
+
+  return {
+    players: confirmedPlayers,
+    leftGameCount: players.filter(
+      (player) =>
+        checked.has(Number(player.id)) &&
+        !inGameByUserId.has(Number(player.id)),
+    ).length,
+    unavailableCount: players.filter(
+      (player) => !checked.has(Number(player.id)),
+    ).length,
+  };
 }
 
-async function getPresenceBatched(userIds) {
+export async function getPresenceBatched(
+  userIds,
+  presenceFetcher = getUsersPresence,
+) {
   const presences = [];
   const checkedIds = [];
 
@@ -2202,9 +2223,13 @@ async function getPresenceBatched(userIds) {
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
-        const result = await getUsersPresence(batch);
+        const result = await presenceFetcher(batch);
         presences.push(...result);
-        checkedIds.push(...batch);
+        checkedIds.push(
+          ...result
+            .map((presence) => Number(presence?.userId))
+            .filter((userId) => Number.isInteger(userId) && userId > 0),
+        );
         success = true;
         break;
       } catch (error) {
@@ -2427,6 +2452,7 @@ function selectCandidatesFromPool(
     respectCooldown = true,
     minimumValue = null,
     minimumRap = null,
+    excludeUserIds = null,
   } = {},
 ) {
   const cooldownMs = getPositiveIntegerEnv(
@@ -2437,11 +2463,27 @@ function selectCandidatesFromPool(
   const hotWatchlist = [];
   const fresh = [];
   const coolingDown = [];
+  let excludedCandidateCount = 0;
+  const excluded =
+    excludeUserIds instanceof Set
+      ? excludeUserIds
+      : new Set(excludeUserIds ?? []);
 
   for (const candidate of candidatePool.values()) {
+    if (excluded.has(Number(candidate.userId))) {
+      excludedCandidateCount += 1;
+      continue;
+    }
+
     // Known 450k+ /scan hits are the hot pool for /target.
     // They bypass the normal cooldown so every /target run checks them first.
-    if (candidate.sources?.has("Verified /scan RAP watchlist")) {
+    if (
+      candidate.sources?.has("Verified /scan RAP watchlist") &&
+      (minimumRap === null ||
+        minimumRap === undefined ||
+        (Number.isFinite(Number(candidate.lastKnownRap)) &&
+          Number(candidate.lastKnownRap) >= Number(minimumRap)))
+    ) {
       hotWatchlist.push(candidate);
       continue;
     }
@@ -2503,6 +2545,7 @@ function selectCandidatesFromPool(
   return {
     userIds: selectedCandidates.map((candidate) => candidate.userId),
     freshCount: Math.min(preferred.length, limit),
+    excludedCandidateCount,
     recentlyCheckedSkipped: Math.max(
       0,
       coolingDown.length -

@@ -10,7 +10,8 @@ Node.js + `discord.js` bot for public Roblox lookups and Discord slash commands.
 - `/rbx2dc username:<name>` — verified public Roblox-to-Discord mapping when a compatible association provider is configured; otherwise `Unavailable`.
 - `/dc2rb discord_user:<name-or-id>` — verified public Discord-to-Roblox mapping when a compatible association provider is configured; otherwise `Unavailable`.
 - `/alerts action:<enable|disable|status>` — opt in/out of monitor mentions.
-- `/target min_value:<optional> min_rap:<optional> limit:<optional>` — defaults to **150,000+ collectible value** and only returns players who are currently `InGame`. `min_rap` remains available as an optional extra filter; using only `min_rap` preserves the older RAP-only behavior. Value can come from Rolimon's public player/leaderboard data or from a public Roblox collectible inventory enriched with Rolimon's item values. The rotating discovery pool still uses the existing Roblox and Rolimon's routes.
+- `/target min_value:<optional> min_rap:<optional> limit:<optional>` — defaults to **450,000+ RAP**, prioritizes qualifying members of the verified `/scan` watchlist, and confirms `InGame` status again immediately before display. Supplying `min_value` without `min_rap` switches to value-only targeting.
+- `/scan min_rap:<optional> limit:<optional>` — verifies new candidates and adds them to the presence watchlist. Existing members are excluded before the candidate cap is applied, so repeated scans expand the pool instead of rechecking known users.
 - `/rbx2mm2 min_rap:<optional> limit:<optional>` — uses the same rotating candidate database as `/target`, keeps only players whose public Roblox presence reports the Murder Mystery 2 universe, then applies the Roblox RAP threshold. MM2 inventory value is shown when a verified inventory provider returns it.
 - `/rbx2adm min_rap:<optional> limit:<optional>` — same pipeline for the official Adopt Me universe. Adopt Me game-inventory value is shown only when a compatible verified user-inventory provider is configured.
 
@@ -64,7 +65,7 @@ Discord-to-Roblox example:
 
 ## Deployment caveat
 
-`data/alert-subscribers.json` is local file storage. On hosts with ephemeral filesystems, alert subscriptions may reset after a restart/deploy. The bot itself still runs; use a database later if durable subscriptions matter.
+`data/alert-subscribers.json` and `data/scan-watchlist.json` are local file storage. On Railway or other hosts with ephemeral filesystems, they may reset after a restart/deploy unless a persistent volume is mounted at `/app/data`.
 
 
-`ROBLOX_TARGET_MIN_VALUE` controls the default `/target` collectible-value floor and defaults to `150000` in `.env.example`.
+Railway can deploy this repository directly with the root `Dockerfile`; its command is `npm start`. Keep the existing environment variables unchanged. A health-check URL is not required because this is a Discord worker rather than an HTTP service.

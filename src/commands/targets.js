@@ -100,6 +100,8 @@ function buildTargetEmbeds(result) {
         `Profile metadata fallback: ${result.profileUnavailableCount ?? 0}`,
         `Verification errors: ${result.verificationErrorCount ?? 0}`,
         `Passed threshold before live recheck: ${result.preRecheckVerifiedCount ?? 0}`,
+        `Left game before final recheck: ${result.finalPresenceLeftGameCount ?? 0}`,
+        `Final presence unavailable: ${result.finalPresenceUnavailableCount ?? 0}`,
         `Cooling candidates skipped: ${result.recentlyCheckedSkipped ?? 0}`,
         `Verified scan watchlist: ${result.candidateSourceCounts?.watchlist ?? 0}`,
         `Trade-ad users: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
