@@ -20,7 +20,10 @@ import {
 } from "../roblox/api.js";
 import { getInventorySummary } from "../roblox/inventory.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
-import { getRolimonsItems } from "../sources/rolimons-items.js";
+import {
+  enrichInventoryWithRolimons,
+  getRolimonsItems,
+} from "../sources/rolimons-items.js";
 import { getRecentTradeAdPlayers } from "../sources/rolimons-trade-ads.js";
 import { getRolimonsLeaderboardPlayers } from "../sources/rolimons-leaderboard.js";
 import { searchRolimonsPlayers } from "../sources/rolimons-player-search.js";
@@ -28,6 +31,7 @@ import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
 
 export const DEFAULT_TARGET_RAP = 450_000;
+export const DEFAULT_TARGET_VALUE = 150_000;
 export const DEFAULT_TARGET_COUNT = 5;
 export const MAX_TARGETS = 7;
 
@@ -134,7 +138,8 @@ export function startTargetCandidatePoolWarmup() {
 }
 
 export async function scanDiscoveredTargets({
-  minimumRap = getMinimumTargetRap(),
+  minimumValue = getMinimumTargetValue(),
+  minimumRap = null,
   limit = DEFAULT_TARGET_COUNT,
 } = {}) {
   const requestedLimit = Math.min(
@@ -164,12 +169,15 @@ export async function scanDiscoveredTargets({
     ),
   );
 
-  const discovery = await discoverCandidateUserIds(minimumRap, {
+  const discovery = await discoverCandidateUserIds({
+    minimumValue,
+    minimumRap,
     maxCandidatesOverride: maxPresenceCandidates,
   });
 
   if (discovery.userIds.length === 0) {
     return {
+      minimumValue,
       minimumRap,
       players: [],
       candidateCount: 0,
@@ -180,6 +188,11 @@ export async function scanDiscoveredTargets({
       presenceScannedCount: 0,
       activeCount: 0,
       verifiedCount: 0,
+      verificationAttempts: 0,
+      valueUnavailableCount: 0,
+      belowValueCount: 0,
+      rapUnavailableCount: 0,
+      belowRapCount: 0,
       sources: discovery.sources,
       skipped: "No candidates were returned by the discovery routes.",
     };
@@ -190,8 +203,10 @@ export async function scanDiscoveredTargets({
   const activeSeen = new Map();
   let presenceScannedCount = 0;
   let verificationAttempts = 0;
+  let valueUnavailableCount = 0;
+  let belowValueCount = 0;
   let rapUnavailableCount = 0;
-  let belowThresholdCount = 0;
+  let belowRapCount = 0;
   const maxActiveToVerify = getPositiveIntegerEnv(
     "ROBLOX_TARGET_MAX_ACTIVE_TO_VERIFY",
     DEFAULT_MAX_ACTIVE_TO_VERIFY,
@@ -220,9 +235,11 @@ export async function scanDiscoveredTargets({
         (left, right) =>
           getCandidatePriority(
             candidatePool.get(Number(right.userId)),
+            { minimumValue, minimumRap },
           ) -
           getCandidatePriority(
             candidatePool.get(Number(left.userId)),
+            { minimumValue, minimumRap },
           ),
       );
 
@@ -246,25 +263,30 @@ export async function scanDiscoveredTargets({
       const batch = activeWave.slice(index, index + VERIFY_CONCURRENCY);
       const batchResults = await Promise.all(
         batch.map((presence) =>
-          buildDiscoveredTargetPlayer(presence, minimumRap).catch(
-            (error) => {
-              console.warn(
-                `Target verification failed for Roblox user ${presence.userId}:`,
-                error,
-              );
-              return null;
-            },
-          ),
+          buildDiscoveredTargetPlayer(presence, {
+            minimumValue,
+            minimumRap,
+          }).catch((error) => {
+            console.warn(
+              `Target verification failed for Roblox user ${presence.userId}:`,
+              error,
+            );
+            return null;
+          }),
         ),
       );
 
       for (const player of batchResults) {
         if (player?.qualifies) {
           verifiedPlayers.push(player);
+        } else if (player?.reason === "value-unavailable") {
+          valueUnavailableCount += 1;
+        } else if (player?.reason === "below-value") {
+          belowValueCount += 1;
         } else if (player?.reason === "rap-unavailable") {
           rapUnavailableCount += 1;
-        } else if (player?.reason === "below-threshold") {
-          belowThresholdCount += 1;
+        } else if (player?.reason === "below-rap") {
+          belowRapCount += 1;
         }
       }
     }
@@ -275,6 +297,7 @@ export async function scanDiscoveredTargets({
   );
 
   return {
+    minimumValue,
     minimumRap,
     players: shuffle(stillInGamePlayers)
       .slice(0, requestedLimit)
@@ -288,8 +311,10 @@ export async function scanDiscoveredTargets({
     activeCount: activeSeen.size,
     verifiedCount: stillInGamePlayers.length,
     verificationAttempts,
+    valueUnavailableCount,
+    belowValueCount,
     rapUnavailableCount,
-    belowThresholdCount,
+    belowRapCount,
     scanElapsedMs: Date.now() - startedAt,
     sources: [
       ...new Set([
@@ -317,7 +342,9 @@ export async function scanGameTargets({
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
   );
 
-  const discovery = await discoverCandidateUserIds(minimumRap, {
+  const discovery = await discoverCandidateUserIds({
+    minimumRap,
+    minimumValue: null,
     respectCooldown: false,
     maxCandidatesOverride: getPositiveIntegerEnv(
       "ROBLOX_GAME_TARGET_MAX_CANDIDATES",
@@ -357,7 +384,10 @@ export async function scanGameTargets({
     const batch = gamePresences.slice(index, index + VERIFY_CONCURRENCY);
     const batchResults = await Promise.all(
       batch.map((presence) =>
-        buildDiscoveredTargetPlayer(presence, minimumRap).catch((error) => {
+        buildDiscoveredTargetPlayer(presence, {
+          minimumRap,
+          minimumValue: null,
+        }).catch((error) => {
           console.warn(
             `${game.label} target verification failed for Roblox user ${presence.userId}:`,
             error,
@@ -413,12 +443,12 @@ function isPresenceForGame(presence, game) {
   return game.matches.some((match) => location.includes(match));
 }
 
-async function discoverCandidateUserIds(
-  minimumRap,
-  { respectCooldown = true, maxCandidatesOverride = null } = {},
-) {
-  void minimumRap;
-
+async function discoverCandidateUserIds({
+  minimumValue = null,
+  minimumRap = null,
+  respectCooldown = true,
+  maxCandidatesOverride = null,
+} = {}) {
   const maxCandidates =
     Number.isInteger(Number(maxCandidatesOverride)) &&
     Number(maxCandidatesOverride) > 0
@@ -438,6 +468,8 @@ async function discoverCandidateUserIds(
   const now = Date.now();
   const selection = selectCandidatesFromPool(maxCandidates, now, {
     respectCooldown,
+    minimumValue,
+    minimumRap,
   });
 
   return {
@@ -469,6 +501,7 @@ async function discoverCandidateUserIds(
     ],
   };
 }
+
 
 async function refreshCandidatePool() {
   if (candidateRefreshPromise) {
@@ -1557,7 +1590,10 @@ function nextSearchTerms(count) {
   return terms;
 }
 
-async function buildDiscoveredTargetPlayer(presence, minimumRap) {
+async function buildDiscoveredTargetPlayer(
+  presence,
+  { minimumValue = null, minimumRap = null } = {},
+) {
   const userId = Number(presence.userId);
   if (!Number.isInteger(userId) || userId <= 0) {
     return null;
@@ -1574,16 +1610,45 @@ async function buildDiscoveredTargetPlayer(presence, minimumRap) {
   const user = userResult.status === "fulfilled" ? userResult.value : null;
   if (!user) return null;
 
-  const inventory =
+  let inventory =
     inventoryResult.status === "fulfilled" ? inventoryResult.value : null;
   const rolimons =
     rolimonsResult.status === "fulfilled" ? rolimonsResult.value : null;
+
+  if (inventory?.status === "public" && inventory?.items?.length > 0) {
+    try {
+      inventory = await enrichInventoryWithRolimons(inventory);
+    } catch (error) {
+      console.warn(
+        `Could not enrich Roblox inventory with Rolimon's values for ${userId}:`,
+        error,
+      );
+    }
+  }
 
   const candidate = candidatePool.get(userId);
   let { rapValue, rapSource, rapIsPartial } = chooseRapSource(
     inventory,
     rolimons,
   );
+
+  let totalValue =
+    typeof rolimons?.totalValue === "number"
+      ? rolimons.totalValue
+      : typeof inventory?.totalValue === "number"
+        ? inventory.totalValue
+        : Number.isFinite(Number(candidate?.lastKnownValue))
+          ? Number(candidate.lastKnownValue)
+          : null;
+
+  let valueSource =
+    typeof rolimons?.totalValue === "number"
+      ? "Rolimon's public player info"
+      : typeof inventory?.totalValue === "number"
+        ? "Roblox public inventory + Rolimon's item values"
+        : Number.isFinite(Number(candidate?.lastKnownValue))
+          ? "Rolimon's value leaderboard"
+          : "Unavailable";
 
   if (
     typeof rapValue !== "number" &&
@@ -1596,26 +1661,51 @@ async function buildDiscoveredTargetPlayer(presence, minimumRap) {
     rapIsPartial = false;
   }
 
-  if (candidate && typeof rapValue === "number") {
-    candidate.lastKnownRap = rapValue;
-    candidate.lastKnownRapAt = Date.now();
-    candidate.lastKnownRapSource = rapSource;
+  if (candidate) {
+    if (typeof rapValue === "number") {
+      candidate.lastKnownRap = rapValue;
+      candidate.lastKnownRapAt = Date.now();
+      candidate.lastKnownRapSource = rapSource;
+    }
+    if (typeof totalValue === "number") {
+      candidate.lastKnownValue = totalValue;
+      candidate.lastKnownValueAt = Date.now();
+      candidate.lastKnownValueSource = valueSource;
+    }
   }
 
-  if (typeof rapValue !== "number") {
-    return {
-      qualifies: false,
-      id: userId,
-      reason: "rap-unavailable",
-    };
+  if (minimumValue !== null && minimumValue !== undefined) {
+    if (typeof totalValue !== "number") {
+      return {
+        qualifies: false,
+        id: userId,
+        reason: "value-unavailable",
+      };
+    }
+    if (totalValue < minimumValue) {
+      return {
+        qualifies: false,
+        id: userId,
+        reason: "below-value",
+      };
+    }
   }
 
-  if (rapValue < minimumRap) {
-    return {
-      qualifies: false,
-      id: userId,
-      reason: "below-threshold",
-    };
+  if (minimumRap !== null && minimumRap !== undefined) {
+    if (typeof rapValue !== "number") {
+      return {
+        qualifies: false,
+        id: userId,
+        reason: "rap-unavailable",
+      };
+    }
+    if (rapValue < minimumRap) {
+      return {
+        qualifies: false,
+        id: userId,
+        reason: "below-rap",
+      };
+    }
   }
 
   let gameName = presence.lastLocation ?? "Online";
@@ -1654,12 +1744,8 @@ async function buildDiscoveredTargetPlayer(presence, minimumRap) {
     rapValue,
     rapSource,
     rapIsPartial,
-    totalValue:
-      typeof rolimons?.totalValue === "number"
-        ? rolimons.totalValue
-        : Number.isFinite(Number(candidate?.lastKnownValue))
-          ? Number(candidate.lastKnownValue)
-          : null,
+    totalValue,
+    valueSource,
     premiumStatus: rolimons?.premiumStatus ?? "Unavailable",
     gameValue,
     topLimiteds: getTopLimiteds(inventory),
@@ -1873,13 +1959,25 @@ function getPoolSourceCounts() {
   return counts;
 }
 
-function getCandidatePriority(candidate) {
+function getCandidatePriority(
+  candidate,
+  { minimumValue = null, minimumRap = null } = {},
+) {
   const sources = candidate?.sources ?? new Set();
   let score = 0;
 
   if (
+    minimumValue !== null &&
+    Number.isFinite(Number(candidate?.lastKnownValue)) &&
+    Number(candidate.lastKnownValue) >= Number(minimumValue)
+  ) {
+    score += 320;
+  }
+
+  if (
+    minimumRap !== null &&
     Number.isFinite(Number(candidate?.lastKnownRap)) &&
-    Number(candidate.lastKnownRap) >= DEFAULT_TARGET_RAP
+    Number(candidate.lastKnownRap) >= Number(minimumRap)
   ) {
     score += 250;
   }
@@ -1928,6 +2026,8 @@ function addCandidatesToPool(userIds, source, now = Date.now()) {
       lastKnownRapAt: 0,
       lastKnownRapSource: null,
       lastKnownValue: null,
+      lastKnownValueAt: 0,
+      lastKnownValueSource: null,
       sources: new Set(),
     };
 
@@ -1967,7 +2067,11 @@ function pruneCandidatePool(now = Date.now()) {
 function selectCandidatesFromPool(
   limit,
   now = Date.now(),
-  { respectCooldown = true } = {},
+  {
+    respectCooldown = true,
+    minimumValue = null,
+    minimumRap = null,
+  } = {},
 ) {
   const cooldownMs = getPositiveIntegerEnv(
     "ROBLOX_TARGET_RECENT_CHECK_COOLDOWN_MS",
@@ -1993,14 +2097,16 @@ function selectCandidatesFromPool(
     fresh.filter((candidate) => !candidate.lastCheckedAt),
   ).sort(
     (left, right) =>
-      getCandidatePriority(right) - getCandidatePriority(left),
+      getCandidatePriority(right, { minimumValue, minimumRap }) -
+      getCandidatePriority(left, { minimumValue, minimumRap }),
   );
 
   const previouslyChecked = shuffle(
     fresh.filter((candidate) => candidate.lastCheckedAt),
   ).sort((left, right) => {
     const priorityDelta =
-      getCandidatePriority(right) - getCandidatePriority(left);
+      getCandidatePriority(right, { minimumValue, minimumRap }) -
+      getCandidatePriority(left, { minimumValue, minimumRap });
     if (priorityDelta !== 0) return priorityDelta;
     return left.lastCheckedAt - right.lastCheckedAt;
   });
@@ -2069,6 +2175,13 @@ function getPresenceStatus(type) {
 
 function getMinimumTargetRap() {
   return getPositiveIntegerEnv("ROBLOX_TARGET_MIN_RAP", DEFAULT_TARGET_RAP);
+}
+
+function getMinimumTargetValue() {
+  return getPositiveIntegerEnv(
+    "ROBLOX_TARGET_MIN_VALUE",
+    DEFAULT_TARGET_VALUE,
+  );
 }
 
 function getPositiveIntegerEnv(name, fallback) {
