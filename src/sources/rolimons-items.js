@@ -1,6 +1,7 @@
 const REQUEST_TIMEOUT_MS = 10_000;
 const ITEM_TTL_MS = 5 * 60 * 1000;
 const ENDPOINTS = [
+  "https://api.rolimons.com/items/v3/itemdetails",
   "https://api.rolimons.com/items/v2/itemdetails",
   "https://api.rolimons.com/items/v1/itemdetails",
   "https://www.rolimons.com/itemapi/itemdetails",
@@ -173,7 +174,11 @@ function getMatchScore(item, query) {
 
 async function fetchJson(url) {
   const response = await fetch(url, {
-    headers: { Accept: "application/json", "User-Agent": "trinilotbot/1.1" },
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "trinilotbot/1.2",
+      Referer: "https://www.rolimons.com/",
+    },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
