@@ -61,7 +61,7 @@ export async function getRobloxProfile(identifier) {
   const rolimons = rolimonsResult.status === "fulfilled" ? rolimonsResult.value : null;
   const socials = socialsResult.status === "fulfilled" ? socialsResult.value : null;
   const badges = badgesResult.status === "fulfilled" ? badgesResult.value : [];
-  const currentGame = await buildCurrentGame(presence);
+  const currentGame = await buildCurrentGame(presence, lookup.id);
 
   let inventory = inventoryResult.status === "fulfilled" ? inventoryResult.value : null;
   if (inventory?.status === "public" && inventory.items.length > 0) {
@@ -132,7 +132,7 @@ function normalizeBadges(badges) {
     .slice(0, 12);
 }
 
-async function buildCurrentGame(presence) {
+async function buildCurrentGame(presence, userId) {
   if (presence?.userPresenceType !== 2) return null;
 
   let gameName = presence.lastLocation ?? "Unavailable";
@@ -153,7 +153,12 @@ async function buildCurrentGame(presence) {
     universeId: presence.universeId ?? null,
     placeId,
     gameId: presence.gameId ?? null,
-    gameUrl: placeId ? `https://www.roblox.com/games/start?placeId=${encodeURIComponent(placeId)}` : null,
+    gameUrl: placeId
+      ? `https://www.roblox.com/games/start?placeId=${encodeURIComponent(placeId)}`
+      : null,
+    followJoinUrl: userId
+      ? `https://www.roblox.com/games/start?userId=${encodeURIComponent(userId)}`
+      : null,
     joinUrl: await getPublicJoinUrl(presence),
   };
 }
