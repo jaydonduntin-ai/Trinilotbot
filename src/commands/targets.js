@@ -84,6 +84,11 @@ function buildTargetEmbeds(result) {
         `Roblox group search: ${result.candidateSourceCounts?.groupSearchMembers ?? 0}`,
         `Roblox group graph: ${result.candidateSourceCounts?.groupGraphMembers ?? 0}`,
         `Roblox friends' groups: ${result.candidateSourceCounts?.friendGroupMembers ?? 0}`,
+        `Roblox primary groups: ${result.candidateSourceCounts?.primaryGroupMembers ?? 0}`,
+        `Roblox group owners: ${result.candidateSourceCounts?.groupOwners ?? 0}`,
+        `Roblox group wall posters: ${result.candidateSourceCounts?.groupWallPosters ?? 0}`,
+        `Roblox allied groups: ${result.candidateSourceCounts?.allyGroupMembers ?? 0}`,
+        `Roblox enemy groups: ${result.candidateSourceCounts?.enemyGroupMembers ?? 0}`,
         `Active candidates checked: ${result.activeCount ?? 0}`,
         `RAP threshold: ${result.minimumRap.toLocaleString()}`,
       ]
