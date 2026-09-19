@@ -16,6 +16,19 @@ export const DEFAULT_TARGET_RAP = 450_000;
 export const DEFAULT_TARGET_COUNT = 5;
 export const MAX_TARGETS = 7;
 
+const GAME_TARGETS = {
+  mm2: {
+    label: "Murder Mystery 2",
+    universeId: 66654135,
+    matches: ["murder mystery 2", "mm2"],
+  },
+  "adopt-me": {
+    label: "Adopt Me",
+    universeId: 383310974,
+    matches: ["adopt me"],
+  },
+};
+
 const DEFAULT_SEED_ITEM_COUNT = 12;
 const DEFAULT_OWNERS_PER_ITEM = 20;
 const DEFAULT_MAX_CANDIDATES = 350;
@@ -129,7 +142,113 @@ export async function scanDiscoveredTargets({
   };
 }
 
-async function discoverCandidateUserIds(minimumRap) {
+export async function scanGameTargets({
+  gameKey,
+  minimumRap = getMinimumTargetRap(),
+  limit = DEFAULT_TARGET_COUNT,
+} = {}) {
+  const game = GAME_TARGETS[gameKey];
+  if (!game) {
+    throw new Error(`Unsupported game target key: ${gameKey}`);
+  }
+
+  const requestedLimit = Math.min(
+    MAX_TARGETS,
+    Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
+  );
+
+  // Refresh the same candidate pool used by /target, then inspect the pool for
+  // players currently active in the requested experience.
+  const discovery = await discoverCandidateUserIds(minimumRap, {
+    respectCooldown: false,
+  });
+
+  if (discovery.userIds.length === 0) {
+    return {
+      gameKey,
+      gameLabel: game.label,
+      universeId: game.universeId,
+      minimumRap,
+      players: [],
+      candidateCount: 0,
+      candidatePoolSize: discovery.candidatePoolSize,
+      candidateSourceCounts: discovery.candidateSourceCounts,
+      gameActiveCount: 0,
+      verifiedCount: 0,
+      sources: discovery.sources,
+    };
+  }
+
+  const presenceScan = await getPresenceBatched(discovery.userIds);
+  const gamePresences = shuffle(
+    presenceScan.presences.filter((presence) =>
+      isPresenceForGame(presence, game),
+    ),
+  );
+
+  const verifiedPlayers = [];
+  for (let index = 0; index < gamePresences.length; index += VERIFY_CONCURRENCY) {
+    const batch = gamePresences.slice(index, index + VERIFY_CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map((presence) =>
+        buildDiscoveredTargetPlayer(presence, minimumRap).catch((error) => {
+          console.warn(
+            `${game.label} target verification failed for Roblox user ${presence.userId}:`,
+            error,
+          );
+          return null;
+        }),
+      ),
+    );
+
+    for (const player of batchResults) {
+      if (player?.qualifies) {
+        verifiedPlayers.push(player);
+      }
+    }
+
+    if (verifiedPlayers.length >= requestedLimit) {
+      break;
+    }
+  }
+
+  return {
+    gameKey,
+    gameLabel: game.label,
+    universeId: game.universeId,
+    minimumRap,
+    players: shuffle(verifiedPlayers)
+      .slice(0, requestedLimit)
+      .map(({ qualifies, ...player }) => player),
+    candidateCount: discovery.userIds.length,
+    candidatePoolSize: discovery.candidatePoolSize,
+    candidateSourceCounts: discovery.candidateSourceCounts,
+    gameActiveCount: gamePresences.length,
+    verifiedCount: verifiedPlayers.length,
+    sources: [
+      ...new Set([
+        ...discovery.sources,
+        "Roblox public presence",
+        "Roblox public collectibles inventory",
+        "Rolimon's public player info",
+      ]),
+    ],
+  };
+}
+
+function isPresenceForGame(presence, game) {
+  if (Number(presence?.universeId) === Number(game.universeId)) {
+    return true;
+  }
+
+  const location = String(presence?.lastLocation ?? "").toLowerCase();
+  return game.matches.some((match) => location.includes(match));
+}
+
+async function discoverCandidateUserIds(
+  minimumRap,
+  { respectCooldown = true } = {},
+) {
   const seedItemCount = getPositiveIntegerEnv(
     "ROBLOX_TARGET_SEED_ITEM_COUNT",
     DEFAULT_SEED_ITEM_COUNT,
@@ -246,7 +365,9 @@ async function discoverCandidateUserIds(minimumRap) {
   addCandidatesToPool(ownerCandidates, "Roblox asset owners", now);
   pruneCandidatePool(now);
 
-  const selection = selectCandidatesFromPool(maxCandidates, now);
+  const selection = selectCandidatesFromPool(maxCandidates, now, {
+    respectCooldown,
+  });
   const userIds = selection.userIds;
 
   console.info(
@@ -512,7 +633,11 @@ function pruneCandidatePool(now = Date.now()) {
   }
 }
 
-function selectCandidatesFromPool(limit, now = Date.now()) {
+function selectCandidatesFromPool(
+  limit,
+  now = Date.now(),
+  { respectCooldown = true } = {},
+) {
   const cooldownMs = getPositiveIntegerEnv(
     "ROBLOX_TARGET_RECENT_CHECK_COOLDOWN_MS",
     DEFAULT_RECENT_CHECK_COOLDOWN_MS,
@@ -523,6 +648,7 @@ function selectCandidatesFromPool(limit, now = Date.now()) {
 
   for (const candidate of candidatePool.values()) {
     if (
+      !respectCooldown ||
       !candidate.lastCheckedAt ||
       now - candidate.lastCheckedAt >= cooldownMs
     ) {
