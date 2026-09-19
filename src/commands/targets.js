@@ -101,6 +101,7 @@ function buildTargetEmbeds(result) {
         `Verification errors: ${result.verificationErrorCount ?? 0}`,
         `Passed threshold before live recheck: ${result.preRecheckVerifiedCount ?? 0}`,
         `Cooling candidates skipped: ${result.recentlyCheckedSkipped ?? 0}`,
+        `Verified scan watchlist: ${result.candidateSourceCounts?.watchlist ?? 0}`,
         `Trade-ad users: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
         `Jailbreak trade users: ${result.candidateSourceCounts?.jailbreakTrades ?? 0}`,
         `Limited owners: ${result.candidateSourceCounts?.limitedOwners ?? 0}`,
