@@ -130,9 +130,7 @@ export function startTargetCandidatePoolWarmup() {
   const refresh = async () => {
     try {
       const stats = await refreshCandidatePool();
-      console.info(
-        `Target pool refresh: +${stats.userSearch} Roblox-search, +${stats.socialGraph} friends, +${stats.followers} followers, +${stats.followings} followings, +${stats.tradeAds} trade-ad, +${stats.rolimonsSearch} Rolimon's-search, +${stats.leaderboard} leaderboard, +${stats.limitedOwners} Rolimon's-owner, +${stats.marketplaceCreators} marketplace-creators, +${stats.marketplaceOwners} marketplace-owners, +${stats.marketplaceGroupMembers} marketplace-group-members, +${stats.groupSearchMembers} group-search, +${stats.groupGraphMembers} group-graph, +${stats.friendGroupMembers} friend-group, +${stats.primaryGroupMembers} primary-group, +${stats.groupOwners} group-owner, +${stats.groupWallPosters} wall-poster, +${stats.allyGroupMembers} ally-group, +${stats.enemyGroupMembers} enemy-group users, ${candidatePool.size} pooled.`,
-      );
+      console.info(`Target pool refresh: +${stats.tradeAds ?? 0} Rolimon\'s trade-ad users, ${candidatePool.size} pooled.`);
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
     }
@@ -783,25 +781,7 @@ async function discoverCandidateUserIds({
     freshCandidateCount: selection.freshCount,
     recentlyCheckedSkipped: selection.recentlyCheckedSkipped,
     sources: [
-      "Roblox public user search",
-      "Roblox public friends graph",
       "Rolimon's recent trade ads",
-      "Rolimon's limited catalog + Roblox public asset owners",
-      "Roblox public group search + group members",
-      "Roblox public user-group graph + group members",
-      "Roblox public followers",
-      "Roblox public followings",
-      "Roblox friends' public groups + group members",
-      "Rolimon's player search",
-      "Rolimon's value leaderboard",
-      "Roblox Marketplace creators",
-      "Roblox Marketplace collectible owners",
-      "Roblox Marketplace creator-group members",
-      "Roblox public primary-group members",
-      "Roblox public group owners",
-      "Roblox public group wall posters",
-      "Roblox public allied-group members",
-      "Roblox public enemy-group members",
     ],
   };
 }
@@ -825,54 +805,10 @@ async function refreshCandidatePool() {
 }
 
 async function refreshGeneralCandidatePool() {
-  const terms = nextSearchTerms(SEARCH_TERMS_PER_REFRESH);
-  const rolimonsTerms = terms.slice(0, ROLIMONS_SEARCH_TERMS_PER_REFRESH);
-
-  const [searchResults, tradeAdsResult, rolimonsSearchResults] =
-    await Promise.all([
-      mapWithConcurrency(
-        terms,
-        SEARCH_CONCURRENCY,
-        async (term) => {
-          try {
-            const result = await searchRobloxUsers(term, { limit: 10 });
-            return result.users;
-          } catch (error) {
-            console.warn(`Roblox user search failed for "${term}":`, error);
-            return [];
-          }
-        },
-      ),
-      getRecentTradeAdPlayers().catch((error) => {
-        console.warn("Rolimon's trade-ad discovery failed:", error);
-        return null;
-      }),
-      mapWithConcurrency(
-        rolimonsTerms,
-        SEARCH_CONCURRENCY,
-        async (term) => {
-          try {
-            const result = await searchRolimonsPlayers(term);
-            return result.players;
-          } catch (error) {
-            console.warn(
-              `Rolimon's player search failed for "${term}":`,
-              error,
-            );
-            return [];
-          }
-        },
-      ),
-    ]);
-
-  const searchUserIds = [
-    ...new Set(
-      searchResults
-        .flat()
-        .map((user) => Number(user?.id))
-        .filter((userId) => Number.isInteger(userId) && userId > 0),
-    ),
-  ];
+  const tradeAdsResult = await getRecentTradeAdPlayers().catch((error) => {
+    console.warn("Rolimon's trade-ad discovery failed:", error);
+    return null;
+  });
 
   const tradeAdUserIds = [
     ...new Set(
@@ -882,147 +818,26 @@ async function refreshGeneralCandidatePool() {
     ),
   ];
 
-  const rolimonsSearchUserIds = [
-    ...new Set(
-      rolimonsSearchResults
-        .flat()
-        .map((player) => Number(player?.userId))
-        .filter((userId) => Number.isInteger(userId) && userId > 0),
-    ),
-  ];
-
-  const now = Date.now();
-  addCandidatesToPool(searchUserIds, "Roblox public user search", now);
   addCandidatesToPool(
     tradeAdUserIds,
     "Rolimon's recent trade ads",
-    now,
-  );
-  addCandidatesToPool(
-    rolimonsSearchUserIds,
-    "Rolimon's player search",
-    now,
-  );
-
-  const socialSeeds = selectSocialExpansionSeeds(SOCIAL_SEEDS_PER_REFRESH);
-  const socialResults = await mapWithConcurrency(
-    socialSeeds,
-    SOCIAL_CONCURRENCY,
-    async (candidate) => {
-      try {
-        const friends = await getUserFriends(candidate.userId);
-        candidate.lastSocialExpandedAt = Date.now();
-        return friends;
-      } catch (error) {
-        candidate.lastSocialExpandedAt = Date.now();
-        console.warn(
-          `Roblox friend expansion failed for user ${candidate.userId}:`,
-          error,
-        );
-        return [];
-      }
-    },
-  );
-
-  const socialUserIds = [
-    ...new Set(
-      socialResults
-        .flat()
-        .map((user) => Number(user?.id))
-        .filter((userId) => Number.isInteger(userId) && userId > 0),
-    ),
-  ];
-
-  addCandidatesToPool(
-    socialUserIds,
-    "Roblox public friends graph",
     Date.now(),
   );
 
-  const followSeeds = selectFollowExpansionSeeds(FOLLOW_SEEDS_PER_REFRESH);
-  const followResults = await mapWithConcurrency(
-    followSeeds,
-    SOCIAL_CONCURRENCY,
-    async (candidate) => {
-      const [followersResult, followingsResult] = await Promise.allSettled([
-        getUserFollowers(candidate.userId, { limit: 100 }),
-        getUserFollowings(candidate.userId, { limit: 100 }),
-      ]);
+  pruneCandidatePool();
 
-      candidate.lastFollowExpandedAt = Date.now();
-      return {
-        followers:
-          followersResult.status === "fulfilled"
-            ? followersResult.value.users
-            : [],
-        followings:
-          followingsResult.status === "fulfilled"
-            ? followingsResult.value.users
-            : [],
-      };
-    },
-  );
-
-  const followerUserIds = [
-    ...new Set(
-      followResults
-        .flatMap((result) => result.followers)
-        .map((user) => Number(user?.id))
-        .filter((userId) => Number.isInteger(userId) && userId > 0),
-    ),
-  ];
-
-  const followingUserIds = [
-    ...new Set(
-      followResults
-        .flatMap((result) => result.followings)
-        .map((user) => Number(user?.id))
-        .filter((userId) => Number.isInteger(userId) && userId > 0),
-    ),
-  ];
-
-  addCandidatesToPool(
-    followerUserIds,
-    "Roblox public followers",
-    Date.now(),
-  );
-  addCandidatesToPool(
-    followingUserIds,
-    "Roblox public followings",
-    Date.now(),
-  );
-
-  let limitedOwnerUserIds = [];
-  if (
-    Date.now() - lastLimitedOwnerRefreshAt >=
-    LIMITED_OWNER_REFRESH_INTERVAL_MS
-  ) {
-    lastLimitedOwnerRefreshAt = Date.now();
-    limitedOwnerUserIds = await refreshLimitedOwnerCandidates(
-      tradeAdsResult?.itemIds ?? [],
-    );
-    addCandidatesToPool(
-      limitedOwnerUserIds,
-      "Rolimon's limited catalog + Roblox public asset owners",
-      Date.now(),
-    );
-  }
-
-  let leaderboardUserIds = [];
-  if (
-    Date.now() - lastLeaderboardRefreshAt >=
-    ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS
-  ) {
-    lastLeaderboardRefreshAt = Date.now();
-    leaderboardUserIds = await refreshRolimonsLeaderboardCandidates();
-    addCandidatesToPool(
-      leaderboardUserIds,
-      "Rolimon's value leaderboard",
-      Date.now(),
-    );
-  }
-
-  let groupSourceCounts = {
+  return {
+    userSearch: 0,
+    socialGraph: 0,
+    followers: 0,
+    followings: 0,
+    tradeAds: tradeAdUserIds.length,
+    rolimonsSearch: 0,
+    leaderboard: 0,
+    limitedOwners: 0,
+    marketplaceCreators: 0,
+    marketplaceOwners: 0,
+    marketplaceGroupMembers: 0,
     groupSearchMembers: 0,
     groupGraphMembers: 0,
     friendGroupMembers: 0,
@@ -1031,38 +846,6 @@ async function refreshGeneralCandidatePool() {
     groupWallPosters: 0,
     allyGroupMembers: 0,
     enemyGroupMembers: 0,
-  };
-  if (Date.now() - lastGroupRefreshAt >= GROUP_REFRESH_INTERVAL_MS) {
-    lastGroupRefreshAt = Date.now();
-    groupSourceCounts = await refreshGroupCandidateSources();
-  }
-
-  let marketplaceSourceCounts = {
-    marketplaceCreators: 0,
-    marketplaceOwners: 0,
-    marketplaceGroupMembers: 0,
-  };
-  if (
-    Date.now() - lastMarketplaceRefreshAt >=
-    MARKETPLACE_REFRESH_INTERVAL_MS
-  ) {
-    lastMarketplaceRefreshAt = Date.now();
-    marketplaceSourceCounts = await refreshMarketplaceCandidateSources();
-  }
-
-  pruneCandidatePool();
-
-  return {
-    userSearch: searchUserIds.length,
-    socialGraph: socialUserIds.length,
-    followers: followerUserIds.length,
-    followings: followingUserIds.length,
-    tradeAds: tradeAdUserIds.length,
-    rolimonsSearch: rolimonsSearchUserIds.length,
-    leaderboard: leaderboardUserIds.length,
-    limitedOwners: limitedOwnerUserIds.length,
-    ...groupSourceCounts,
-    ...marketplaceSourceCounts,
   };
 }
 
