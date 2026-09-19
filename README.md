@@ -12,6 +12,7 @@ Node.js + `discord.js` bot for public Roblox lookups and Discord slash commands.
 - `/alerts action:<enable|disable|status>` — opt in/out of monitor mentions.
 - `/target min_value:<optional> min_rap:<optional> limit:<optional>` — defaults to **450,000+ RAP**, prioritizes qualifying members of the verified `/scan` watchlist, and confirms `InGame` status again immediately before display. Supplying `min_value` without `min_rap` switches to value-only targeting.
 - `/scan min_rap:<optional> limit:<optional>` — verifies new candidates and adds them to the presence watchlist. Existing members are excluded before the candidate cap is applied, so repeated scans expand the pool instead of rechecking known users.
+- Target discovery now uses a continuously warmed verified-RAP index plus a background live-presence cache. `/target` reads that cache first and only falls back to a broader discovery pass when it cannot fill the requested live results. The Rolimon's leaderboard sweep defaults to 20 pages per refresh and rotates over time.
 - `/rbx2mm2 min_rap:<optional> limit:<optional>` — uses the same rotating candidate database as `/target`, keeps only players whose public Roblox presence reports the Murder Mystery 2 universe, then applies the Roblox RAP threshold. MM2 inventory value is shown when a verified inventory provider returns it.
 - `/rbx2adm min_rap:<optional> limit:<optional>` — same pipeline for the official Adopt Me universe. Adopt Me game-inventory value is shown only when a compatible verified user-inventory provider is configured.
 
