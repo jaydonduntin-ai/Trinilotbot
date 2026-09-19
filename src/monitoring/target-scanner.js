@@ -1959,8 +1959,22 @@ async function revalidateCurrentlyInGame(players) {
     .map((player) => Number(player?.id))
     .filter((userId) => Number.isInteger(userId) && userId > 0);
 
-  const liveCheck = await getPresenceBatched(userIds);
-  const checkedSet = new Set(liveCheck.checkedIds.map(Number));
+  // Final results must be confirmed live immediately before display.
+  // A failed recheck is treated as unverified, not as "still in game".
+  let liveCheck = await getPresenceBatched(userIds);
+
+  // Retry only users whose final presence could not be checked.
+  const checked = new Set(liveCheck.checkedIds.map(Number));
+  const missedIds = userIds.filter((userId) => !checked.has(userId));
+  if (missedIds.length > 0) {
+    await sleep(350);
+    const retry = await getPresenceBatched(missedIds);
+    liveCheck = {
+      presences: [...liveCheck.presences, ...retry.presences],
+      checkedIds: [...liveCheck.checkedIds, ...retry.checkedIds],
+    };
+  }
+
   const inGameByUserId = new Map(
     liveCheck.presences
       .filter((presence) => Number(presence?.userPresenceType) === 2)
@@ -1968,18 +1982,14 @@ async function revalidateCurrentlyInGame(players) {
   );
 
   return players
-    .filter((player) => {
-      const userId = Number(player.id);
-      // If the second presence check failed for this user, keep the result from
-      // the successful initial check rather than treating "not checked" as offline.
-      return !checkedSet.has(userId) || inGameByUserId.has(userId);
-    })
+    .filter((player) => inGameByUserId.has(Number(player.id)))
     .map((player) => {
       const presence = inGameByUserId.get(Number(player.id));
       return {
         ...player,
-        presenceStatus: presence ? "In game" : "In game (initial check)",
+        presenceStatus: "In game",
         gameName: presence?.lastLocation || player.gameName,
+        presenceVerifiedAt: Date.now(),
       };
     });
 }
