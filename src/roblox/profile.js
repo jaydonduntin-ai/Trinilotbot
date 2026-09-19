@@ -132,7 +132,7 @@ async function buildCurrentGame(presence) {
     universeId: presence.universeId ?? null,
     placeId,
     gameId: presence.gameId ?? null,
-    gameUrl: placeId ? `https://www.roblox.com/games/${encodeURIComponent(placeId)}` : null,
+    gameUrl: placeId ? `https://www.roblox.com/games/start?placeId=${encodeURIComponent(placeId)}` : null,
     joinUrl: await getPublicJoinUrl(presence),
   };
 }
