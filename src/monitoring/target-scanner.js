@@ -32,6 +32,7 @@ import { searchRolimonsPlayers } from "../sources/rolimons-player-search.js";
 import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
 import { getRblxValueProfile } from "../providers/rblxvalue.js";
+import { getScanWatchlist } from "../storage/scan-watchlist.js";
 
 export const DEFAULT_TARGET_RAP = 450_000;
 export const DEFAULT_TARGET_VALUE = 150_000;
@@ -885,6 +886,7 @@ async function discoverCandidateUserIds({
     freshCandidateCount: selection.freshCount,
     recentlyCheckedSkipped: selection.recentlyCheckedSkipped,
     sources: [
+      "Verified /scan RAP watchlist",
       "Roblox public limited owners",
       "Roblox Marketplace collectible owners",
       "Rolimon's value leaderboard",
@@ -914,6 +916,35 @@ async function refreshCandidatePool() {
 
 async function refreshGeneralCandidatePool() {
   const now = Date.now();
+
+  // Highest-signal source: users already verified by /scan at the configured RAP threshold.
+  // This turns the bot's accumulated watchlist into its own persistent discovery index.
+  const watchedPlayers = await getScanWatchlist().catch((error) => {
+    console.warn("Could not load scan watchlist into target discovery:", error);
+    return [];
+  });
+  const watchlistUserIds = watchedPlayers
+    .map((player) => Number(player?.userId))
+    .filter((userId) => Number.isInteger(userId) && userId > 0);
+  addCandidatesToPool(
+    watchlistUserIds,
+    "Verified /scan RAP watchlist",
+    now,
+  );
+  for (const player of watchedPlayers) {
+    const candidate = candidatePool.get(Number(player?.userId));
+    if (!candidate) continue;
+    if (Number.isFinite(Number(player?.rapValue))) {
+      candidate.lastKnownRap = Number(player.rapValue);
+      candidate.lastKnownRapAt = now;
+      candidate.lastKnownRapSource = "Verified /scan RAP watchlist";
+    }
+    if (Number.isFinite(Number(player?.totalValue))) {
+      candidate.lastKnownValue = Number(player.totalValue);
+      candidate.lastKnownValueAt = now;
+      candidate.lastKnownValueSource = "Verified /scan RAP watchlist";
+    }
+  }
 
   // Keep trade ads as one signal, but no longer make discovery depend on them.
   const tradeAdsResult = await getRecentTradeAdPlayers().catch((error) => {
@@ -989,6 +1020,7 @@ async function refreshGeneralCandidatePool() {
 
   return {
     ...getPoolSourceCounts(),
+    watchlist: watchlistUserIds.length,
     tradeAds: tradeAdUserIds.length,
     limitedOwners: limitedOwnerUserIds.length,
     leaderboard: leaderboardUserIds.length,
@@ -2203,6 +2235,7 @@ function getPoolSourceCounts() {
     socialGraph: 0,
     followers: 0,
     followings: 0,
+    watchlist: 0,
     tradeAds: 0,
     jailbreakTrades: 0,
     rolimonsSearch: 0,
@@ -2222,6 +2255,7 @@ function getPoolSourceCounts() {
   };
 
   const sourceToKey = new Map([
+    ["Verified /scan RAP watchlist", "watchlist"],
     ["Roblox public user search", "userSearch"],
     ["Roblox public friends graph", "socialGraph"],
     ["Roblox public followers", "followers"],
@@ -2293,6 +2327,7 @@ function getCandidatePriority(
   }
 
   const weights = new Map([
+    ["Verified /scan RAP watchlist", 500],
     ["Rolimon's value leaderboard", 120],
     [
       "Rolimon's limited catalog + Roblox public asset owners",
