@@ -781,6 +781,9 @@ async function discoverCandidateUserIds({
     freshCandidateCount: selection.freshCount,
     recentlyCheckedSkipped: selection.recentlyCheckedSkipped,
     sources: [
+      "Roblox public limited owners",
+      "Roblox Marketplace collectible owners",
+      "Rolimon's value leaderboard",
       "Rolimon's recent trade ads",
     ],
   };
