@@ -68,8 +68,8 @@ const SEARCH_CONCURRENCY = 4;
 const SOCIAL_CONCURRENCY = 4;
 const FOLLOW_SEEDS_PER_REFRESH = 6;
 const ROLIMONS_SEARCH_TERMS_PER_REFRESH = 6;
-const ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
-const ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 2;
+const ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 5;
 const GROUP_SEARCH_TERMS_PER_REFRESH = 3;
 const GROUPS_PER_SEARCH_TERM = 2;
 const GROUP_MEMBERSHIP_SEEDS_PER_REFRESH = 4;
@@ -210,9 +210,19 @@ export async function scanDiscoveredTargets({
     markCandidatesChecked(presenceScan.checkedIds);
     presenceScannedCount += presenceScan.checkedIds.length;
 
-    const inGamePresences = presenceScan.presences.filter(
-      (presence) => Number(presence?.userPresenceType) === 2,
-    );
+    const inGamePresences = presenceScan.presences
+      .filter(
+        (presence) => Number(presence?.userPresenceType) === 2,
+      )
+      .sort(
+        (left, right) =>
+          getCandidatePriority(
+            candidatePool.get(Number(right.userId)),
+          ) -
+          getCandidatePriority(
+            candidatePool.get(Number(left.userId)),
+          ),
+      );
 
     for (const presence of inGamePresences) {
       activeSeen.set(Number(presence.userId), presence);
@@ -1331,7 +1341,7 @@ function nextLeaderboardPages(count) {
   for (let index = 0; index < count; index += 1) {
     pages.push(leaderboardPageCursor);
     leaderboardPageCursor =
-      leaderboardPageCursor >= 200 ? 1 : leaderboardPageCursor + 1;
+      leaderboardPageCursor >= 40 ? 1 : leaderboardPageCursor + 1;
   }
   return pages;
 }
@@ -1903,14 +1913,27 @@ function selectCandidatesFromPool(
     return left.lastCheckedAt - right.lastCheckedAt;
   });
 
-  const selected = [...neverChecked, ...previouslyChecked]
-    .slice(0, limit)
-    .map((candidate) => candidate.userId);
+  const preferred = [...neverChecked, ...previouslyChecked];
+  const fallbackCooling = [...coolingDown].sort(
+    (left, right) => left.lastCheckedAt - right.lastCheckedAt,
+  );
+
+  const selectedCandidates = [
+    ...preferred,
+    ...fallbackCooling.slice(
+      0,
+      Math.max(0, limit - preferred.length),
+    ),
+  ].slice(0, limit);
 
   return {
-    userIds: selected,
-    freshCount: selected.length,
-    recentlyCheckedSkipped: coolingDown.length,
+    userIds: selectedCandidates.map((candidate) => candidate.userId),
+    freshCount: Math.min(preferred.length, limit),
+    recentlyCheckedSkipped: Math.max(
+      0,
+      coolingDown.length -
+        Math.max(0, limit - preferred.length),
+    ),
   };
 }
 
