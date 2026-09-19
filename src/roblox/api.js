@@ -586,31 +586,8 @@ export async function getRobloxBadges(userId) {
 }
 
 async function fetchAssetOwnersPage(url) {
-  const rawCookie = process.env.ROBLOX_SESSION_COOKIE?.trim();
-  const useCookieFirst =
-    process.env.ROBLOX_OWNER_USE_COOKIE === "true" && Boolean(rawCookie);
-
-  if (useCookieFirst) {
-    try {
-      return await fetchRobloxJson(url, {
-        headers: {
-          Cookie: normalizeRobloxSessionCookie(rawCookie),
-        },
-      });
-    } catch (error) {
-      console.warn(
-        "Authenticated Roblox owner lookup failed; retrying the public owner endpoint.",
-      );
-    }
-  }
-
+  // Owner discovery intentionally uses only Roblox's public endpoint.
   return fetchRobloxJson(url);
-}
-
-function normalizeRobloxSessionCookie(value) {
-  const cookie = String(value ?? "").trim();
-  if (!cookie) return "";
-  return cookie.includes("=") ? cookie : `.ROBLOSECURITY=${cookie}`;
 }
 
 export async function getAssetOwners(assetId, { limit = 10 } = {}) {
