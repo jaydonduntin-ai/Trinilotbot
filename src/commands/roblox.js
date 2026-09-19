@@ -20,10 +20,10 @@ export const robloxCommand = {
     .addStringOption((option) =>
       option
         .setName("username")
-        .setDescription("The Roblox username to look up.")
+        .setDescription("Roblox username, user ID, or profile URL.")
         .setRequired(true)
         .setMinLength(1)
-        .setMaxLength(20),
+        .setMaxLength(100),
     ),
 
   async execute(interaction) {
