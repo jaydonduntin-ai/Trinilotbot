@@ -37,13 +37,47 @@ const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 5_000;
 const DEFAULT_POOL_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
+const TARGET_POOL_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 
 const candidatePool = new Map();
+let targetPoolWarmupTimer = null;
 const DEFAULT_SEED_MIN_ITEM_RAP = 75_000;
 const PRESENCE_BATCH_SIZE = 50;
 const OWNER_CONCURRENCY = 4;
 const VERIFY_CONCURRENCY = 5;
 const OWNER_DISCOVERY_BUDGET_MS = 12_000;
+
+export function startTargetCandidatePoolWarmup() {
+  if (targetPoolWarmupTimer) return;
+
+  const refresh = async () => {
+    try {
+      const result = await getRecentTradeAdPlayers({ force: true });
+      const userIds = result.players
+        .map((player) => Number(player.userId))
+        .filter((userId) => Number.isInteger(userId) && userId > 0);
+
+      addCandidatesToPool(
+        userIds,
+        "Rolimon's recent trade ads (background refresh)",
+        Date.now(),
+      );
+      pruneCandidatePool();
+
+      console.info(
+        `Target candidate pool refreshed in background: +${new Set(userIds).size} seen, ${candidatePool.size} pooled.`,
+      );
+    } catch (error) {
+      console.warn("Background target candidate refresh failed:", error);
+    }
+  };
+
+  void refresh();
+  targetPoolWarmupTimer = setInterval(
+    refresh,
+    TARGET_POOL_REFRESH_INTERVAL_MS,
+  );
+}
 
 export async function scanDiscoveredTargets({
   minimumRap = getMinimumTargetRap(),
