@@ -1,7 +1,6 @@
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_COUNT,
-  DEFAULT_TARGET_RAP,
   DEFAULT_TARGET_VALUE,
   MAX_TARGETS,
   scanDiscoveredTargets,
@@ -26,7 +25,7 @@ export const targetsCommand = {
       option
         .setName("min_rap")
         .setDescription(
-          `Minimum RAP, default ${DEFAULT_TARGET_RAP.toLocaleString()}.`,
+          "Optional extra RAP floor. Leave blank for value-only targeting.",
         )
         .setMinValue(1)
         .setMaxValue(2_000_000_000),
@@ -143,7 +142,10 @@ function buildTargetEmbeds(result) {
     .setTimestamp();
 
   const players = result.players.map((player) => {
-    const rap = `${player.rapIsPartial ? "At least " : ""}${player.rapValue.toLocaleString()} RAP`;
+    const rap =
+      typeof player.rapValue === "number"
+        ? `${player.rapIsPartial ? "At least " : ""}${player.rapValue.toLocaleString()} RAP`
+        : "Unavailable";
     const value =
       typeof player.totalValue === "number"
         ? player.totalValue.toLocaleString()
