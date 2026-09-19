@@ -144,6 +144,128 @@ export async function searchMarketplaceItems({
   };
 }
 
+export async function getRobloxGroupDetails(groupId) {
+  const normalizedId = Number(groupId);
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    return null;
+  }
+
+  return fetchRobloxJson(
+    `${GROUPS_API_URL}/v1/groups/${encodeURIComponent(normalizedId)}`,
+  );
+}
+
+export async function getRobloxGroupWallPosters(
+  groupId,
+  { limit = 50, cursor = null } = {},
+) {
+  const normalizedId = Number(groupId);
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    return { users: [], nextPageCursor: null };
+  }
+
+  const requestedLimit = [10, 25, 50, 100].includes(Number(limit))
+    ? Number(limit)
+    : 50;
+  const cursorQuery = cursor
+    ? `&cursor=${encodeURIComponent(cursor)}`
+    : "";
+
+  const payload = await fetchRobloxJson(
+    `${GROUPS_API_URL}/v1/groups/${encodeURIComponent(
+      normalizedId,
+    )}/wall/posts?sortOrder=Desc&limit=${requestedLimit}${cursorQuery}`,
+  );
+
+  const rawPosts = Array.isArray(payload?.data) ? payload.data : [];
+  const users = [];
+  const seen = new Set();
+
+  for (const post of rawPosts) {
+    const poster =
+      post?.poster ??
+      post?.user ??
+      post?.author ??
+      post?.creator ??
+      null;
+    const userId = Number(
+      poster?.userId ??
+      poster?.id ??
+      post?.posterUserId ??
+      post?.userId,
+    );
+
+    if (!Number.isInteger(userId) || userId <= 0 || seen.has(userId)) {
+      continue;
+    }
+
+    seen.add(userId);
+    users.push({
+      id: userId,
+      name: poster?.username ?? poster?.name ?? null,
+      displayName: poster?.displayName ?? null,
+    });
+  }
+
+  return {
+    users,
+    nextPageCursor: payload?.nextPageCursor ?? null,
+  };
+}
+
+export async function getRobloxGroupRelationships(
+  groupId,
+  relationshipType,
+  { limit = 50, cursor = null } = {},
+) {
+  const normalizedId = Number(groupId);
+  const normalizedType = String(relationshipType ?? "").trim();
+  if (
+    !Number.isInteger(normalizedId) ||
+    normalizedId <= 0 ||
+    !normalizedType
+  ) {
+    return { groups: [], nextPageCursor: null };
+  }
+
+  const requestedLimit = [10, 25, 50, 100].includes(Number(limit))
+    ? Number(limit)
+    : 50;
+  const cursorQuery = cursor
+    ? `&cursor=${encodeURIComponent(cursor)}`
+    : "";
+
+  const payload = await fetchRobloxJson(
+    `${GROUPS_API_URL}/v1/groups/${encodeURIComponent(
+      normalizedId,
+    )}/relationships/${encodeURIComponent(
+      normalizedType,
+    )}?sortOrder=Asc&limit=${requestedLimit}${cursorQuery}`,
+  );
+
+  const rawGroups =
+    payload?.relatedGroups ??
+    payload?.data ??
+    payload?.groups ??
+    [];
+  const groups = [];
+
+  for (const entry of Array.isArray(rawGroups) ? rawGroups : []) {
+    const group = entry?.group ?? entry?.relatedGroup ?? entry;
+    const id = Number(group?.id ?? group?.groupId);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    groups.push({
+      id,
+      name: group?.name ?? null,
+    });
+  }
+
+  return {
+    groups,
+    nextPageCursor: payload?.nextPageCursor ?? null,
+  };
+}
+
 export async function searchRobloxGroups(
   keyword,
   { limit = 10, cursor = null } = {},
