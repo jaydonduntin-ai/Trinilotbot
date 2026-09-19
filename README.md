@@ -10,7 +10,7 @@ Node.js + `discord.js` bot for public Roblox lookups and Discord slash commands.
 - `/rbx2dc username:<name>` — verified public Roblox-to-Discord mapping when a compatible association provider is configured; otherwise `Unavailable`.
 - `/dc2rb discord_user:<name-or-id>` — verified public Discord-to-Roblox mapping when a compatible association provider is configured; otherwise `Unavailable`.
 - `/alerts action:<enable|disable|status>` — opt in/out of monitor mentions.
-- `/target min_rap:<optional> limit:<optional>` — stays game-agnostic and searches active players across Roblox. Its rotating pool can draw from Roblox public user search, friends, followers, followings, group search/member lists, user-group expansion, friends' group connections, primary groups, group owners, group wall posters, allied-group members, enemy-group members, Roblox Marketplace creators, Marketplace collectible owners, Marketplace creator-group members, Rolimon's recent trade ads, Rolimon's player search, Rolimon's value leaderboard, and Rolimon's limited catalog + Roblox public asset-owner lookups. It then performs an adaptive deep presence scan in priority waves (up to 2,500 candidates by default), requires Roblox `InGame` presence, verifies RAP, and performs a final presence recheck before returning results so users who left during the scan are dropped. High-value discovery routes are prioritized, candidates that have already verified above the RAP threshold gain priority on later scans, and cooldowns fall back to the least-recently-checked candidates instead of producing an empty result.
+- `/target min_value:<optional> min_rap:<optional> limit:<optional>` — defaults to **150,000+ collectible value** and only returns players who are currently `InGame`. `min_rap` remains available as an optional extra filter; using only `min_rap` preserves the older RAP-only behavior. Value can come from Rolimon's public player/leaderboard data or from a public Roblox collectible inventory enriched with Rolimon's item values. The rotating discovery pool still uses the existing Roblox and Rolimon's routes.
 - `/rbx2mm2 min_rap:<optional> limit:<optional>` — uses the same rotating candidate database as `/target`, keeps only players whose public Roblox presence reports the Murder Mystery 2 universe, then applies the Roblox RAP threshold. MM2 inventory value is shown when a verified inventory provider returns it.
 - `/rbx2adm min_rap:<optional> limit:<optional>` — same pipeline for the official Adopt Me universe. Adopt Me game-inventory value is shown only when a compatible verified user-inventory provider is configured.
 
@@ -65,3 +65,6 @@ Discord-to-Roblox example:
 ## Deployment caveat
 
 `data/alert-subscribers.json` is local file storage. On hosts with ephemeral filesystems, alert subscriptions may reset after a restart/deploy. The bot itself still runs; use a database later if durable subscriptions matter.
+
+
+`ROBLOX_TARGET_MIN_VALUE` controls the default `/target` collectible-value floor and defaults to `150000` in `.env.example`.
