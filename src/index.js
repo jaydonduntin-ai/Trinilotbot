@@ -1,6 +1,7 @@
 import { Client, Events, GatewayIntentBits, REST, Routes } from "discord.js";
 import { commandModules } from "./commands/index.js";
 import { startMonitoring } from "./monitoring/monitor-service.js";
+import { startTargetCandidatePoolWarmup } from "./monitoring/target-scanner.js";
 import { commandRateLimiter } from "./security/rate-limit.js";
 import { initializeAlertSubscriptions } from "./storage/alert-subscribers.js";
 
@@ -53,6 +54,8 @@ client.once(Events.ClientReady, async (readyClient) => {
       error,
     );
   }
+
+  startTargetCandidatePoolWarmup();
 
   try {
     await startMonitoring(client);
