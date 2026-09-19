@@ -98,7 +98,10 @@ function buildTargetEmbeds(result) {
         `RAP unavailable: ${result.rapUnavailableCount ?? 0}`,
         `Below RAP: ${result.belowRapCount ?? 0}`,
         `Cooling candidates skipped: ${result.recentlyCheckedSkipped ?? 0}`,
-        `Rolimon's trade-ad users: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
+        `Trade-ad users: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
+        `Limited owners: ${result.candidateSourceCounts?.limitedOwners ?? 0}`,
+        `Leaderboard users: ${result.candidateSourceCounts?.leaderboard ?? 0}`,
+        `Marketplace owners: ${result.candidateSourceCounts?.marketplaceOwners ?? 0}`,
         `Verified live above threshold: ${result.verifiedCount ?? 0}`,
         `Scan time: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.minimumValue !== null && result.minimumValue !== undefined
@@ -114,12 +117,12 @@ function buildTargetEmbeds(result) {
     .addFields({
       name: "Discovery source",
       value:
-        "Candidates: Rolimon's recent trade ads\nVerification: Roblox current presence + public value data\n" +
+        "Candidates: Roblox public limited/Marketplace owners + Rolimon's trade ads/leaderboard\nVerification: Roblox current presence + public value data\n" +
         (truncate((result.sources ?? []).join("\n"), 850) || "Unavailable"),
       inline: false,
     })
     .setFooter({
-      text: "Candidates come only from Rolimon's recent trade ads. Results are rechecked for current InGame presence before display.",
+      text: "Discovery uses multiple public sources. Results are rechecked against Roblox current InGame presence before display.",
     })
     .setTimestamp();
 
