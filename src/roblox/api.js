@@ -557,21 +557,40 @@ export async function getGameDetails(universeId) {
   return payload?.data?.[0] ?? null;
 }
 
-export async function isPublicGameInstance(placeId, gameId) {
+export async function isPublicGameInstance(
+  placeId,
+  gameId,
+  { maxPages = 10 } = {},
+) {
   if (!placeId || !gameId) {
     return false;
   }
 
-  const payload = await fetchRobloxJson(
-    `${GAMES_API_URL}/v1/games/${encodeURIComponent(
-      placeId,
-    )}/servers/Public?sortOrder=Asc&limit=100`,
-  );
+  let cursor = null;
+  let pages = 0;
 
-  return (
-    Array.isArray(payload?.data) &&
-    payload.data.some((server) => server.id === gameId)
-  );
+  do {
+    const cursorQuery = cursor
+      ? `&cursor=${encodeURIComponent(cursor)}`
+      : "";
+    const payload = await fetchRobloxJson(
+      `${GAMES_API_URL}/v1/games/${encodeURIComponent(
+        placeId,
+      )}/servers/Public?sortOrder=Asc&limit=100${cursorQuery}`,
+    );
+
+    if (
+      Array.isArray(payload?.data) &&
+      payload.data.some((server) => server.id === gameId)
+    ) {
+      return true;
+    }
+
+    cursor = payload?.nextPageCursor ?? null;
+    pages += 1;
+  } while (cursor && pages < Math.max(1, Number(maxPages) || 10));
+
+  return false;
 }
 
 export async function getAvatarThumbnail(userId) {
