@@ -19,7 +19,10 @@ export const dc2rbCommand = {
       .trim();
     let association = null;
     try {
-      association = await lookupDiscordToRoblox({ query: discordUser });
+      association = await lookupDiscordToRoblox({
+        query: discordUser,
+        guildId: interaction.guildId,
+      });
     } catch (sourceError) {
       console.warn("Discord-to-Roblox public source failed:", sourceError);
     }
@@ -36,8 +39,16 @@ export const dc2rbCommand = {
                 ? ` ([evidence](${association.evidenceUrl}))`
                 : ""
             }`
-          : "No verified public Discord-to-Roblox mapping was available.",
-      ].join("\n"),
+          : "No verified Discord-to-Roblox mapping was available.",
+        association?.corroborated
+          ? "**Verification:** Corroborated by multiple configured sources"
+          : association
+            ? "**Verification:** Verified by source"
+            : null,
+        association?.conflict
+          ? "**Warning:** Providers returned conflicting Roblox IDs."
+          : null,
+      ].filter(Boolean).join("\n"),
       ephemeral: true,
     });
   },
