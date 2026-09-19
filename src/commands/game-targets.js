@@ -1,32 +1,60 @@
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
+  DEFAULT_MM2_VALUE,
   DEFAULT_TARGET_COUNT,
   DEFAULT_TARGET_RAP,
   MAX_TARGETS,
   scanGameTargets,
+  scanMm2ValueTargets,
 } from "../monitoring/target-scanner.js";
 
 function createGameTargetCommand({
   name,
   gameKey,
   gameLabel,
+  supportsGameValue = false,
 }) {
   return {
-    definition: new SlashCommandBuilder()
-      .setName(name)
-      .setDescription(
-        `Find active ${gameLabel} players above a Roblox RAP threshold.`,
-      )
-      .addIntegerOption((option) =>
-        option
-          .setName("min_rap")
-          .setDescription(
-            `Minimum Roblox RAP, default ${DEFAULT_TARGET_RAP.toLocaleString()}.`,
+    definition: (() => {
+      const builder = new SlashCommandBuilder()
+        .setName(name)
+        .setDescription(
+          supportsGameValue
+            ? `Find active ${gameLabel} players by verified game inventory value.`
+            : `Find active ${gameLabel} players above a Roblox RAP threshold.`,
+        );
+
+      if (supportsGameValue) {
+        builder
+          .addIntegerOption((option) =>
+            option
+              .setName("min_value")
+              .setDescription(
+                `Minimum ${gameLabel} inventory value, default ${DEFAULT_MM2_VALUE.toLocaleString()}.`,
+              )
+              .setMinValue(1)
+              .setMaxValue(2_000_000_000),
           )
-          .setMinValue(1)
-          .setMaxValue(2_000_000_000),
-      )
-      .addIntegerOption((option) =>
+          .addIntegerOption((option) =>
+            option
+              .setName("min_rap")
+              .setDescription("Optional extra Roblox RAP floor.")
+              .setMinValue(1)
+              .setMaxValue(2_000_000_000),
+          );
+      } else {
+        builder.addIntegerOption((option) =>
+          option
+            .setName("min_rap")
+            .setDescription(
+              `Minimum Roblox RAP, default ${DEFAULT_TARGET_RAP.toLocaleString()}.`,
+            )
+            .setMinValue(1)
+            .setMaxValue(2_000_000_000),
+        );
+      }
+
+      builder.addIntegerOption((option) =>
         option
           .setName("limit")
           .setDescription(
@@ -34,28 +62,43 @@ function createGameTargetCommand({
           )
           .setMinValue(1)
           .setMaxValue(MAX_TARGETS),
-      ),
+      );
+
+      return builder;
+    })(),
 
     async execute(interaction) {
-      const minimumRap =
-        interaction.options.getInteger("min_rap") ?? undefined;
+      const minimumRap = interaction.options.getInteger("min_rap");
+      const minimumGameValue = supportsGameValue
+        ? (interaction.options.getInteger("min_value") ?? DEFAULT_MM2_VALUE)
+        : null;
       const limit =
         interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
       await interaction.deferReply({ ephemeral: true });
 
       try {
-        const result = await scanGameTargets({
-          gameKey,
-          minimumRap,
-          limit,
-        });
+        const result = supportsGameValue
+          ? await scanMm2ValueTargets({
+              minimumGameValue,
+              minimumRap,
+              limit,
+            })
+          : await scanGameTargets({
+              gameKey,
+              minimumRap: minimumRap ?? undefined,
+              limit,
+            });
 
         await interaction.editReply({
           content:
             result.players.length > 0
-              ? `Found ${result.players.length} active ${gameLabel} player${result.players.length === 1 ? "" : "s"} at or above ${result.minimumRap.toLocaleString()} Roblox RAP.`
-              : `No active ${gameLabel} player at or above ${result.minimumRap.toLocaleString()} Roblox RAP was verified in this pass.`,
+              ? supportsGameValue
+                ? `Found ${result.players.length} active ${gameLabel} player${result.players.length === 1 ? "" : "s"} at or above ${result.minimumGameValue.toLocaleString()} MM2 value.`
+                : `Found ${result.players.length} active ${gameLabel} player${result.players.length === 1 ? "" : "s"} at or above ${result.minimumRap.toLocaleString()} Roblox RAP.`
+              : supportsGameValue
+                ? `No active ${gameLabel} player at or above ${result.minimumGameValue.toLocaleString()} MM2 value was verified in this pass.`
+                : `No active ${gameLabel} player at or above ${result.minimumRap.toLocaleString()} Roblox RAP was verified in this pass.`,
           embeds: buildGameTargetEmbeds(result).slice(0, 10),
         });
       } catch (error) {
@@ -72,6 +115,7 @@ export const rbx2mm2Command = createGameTargetCommand({
   name: "rbx2mm2",
   gameKey: "mm2",
   gameLabel: "Murder Mystery 2",
+  supportsGameValue: true,
 });
 
 export const rbx2admCommand = createGameTargetCommand({
@@ -87,11 +131,31 @@ function buildGameTargetEmbeds(result) {
     .setDescription(
       [
         `Candidate pool: ${result.candidatePoolSize ?? 0}`,
-        `Candidates scanned: ${result.candidateCount ?? 0}`,
+        `Candidates selected: ${result.candidateCount ?? 0}`,
+        result.presenceScannedCount !== undefined
+          ? `Presence checked: ${result.presenceScannedCount}`
+          : null,
         `Active in ${result.gameLabel}: ${result.gameActiveCount ?? 0}`,
+        result.profileChecks !== undefined
+          ? `RBLXValue profile checks: ${result.profileChecks}`
+          : null,
+        result.valueUnavailableCount !== undefined
+          ? `MM2 value unavailable: ${result.valueUnavailableCount}`
+          : null,
+        result.belowGameValueCount !== undefined
+          ? `Below MM2 value: ${result.belowGameValueCount}`
+          : null,
         `Verified above threshold: ${result.verifiedCount ?? 0}`,
-        `Roblox RAP threshold: ${result.minimumRap.toLocaleString()}`,
-      ].join("\n"),
+        result.minimumGameValue !== undefined
+          ? `MM2 value threshold: ${result.minimumGameValue.toLocaleString()}`
+          : null,
+        result.minimumRap !== null && result.minimumRap !== undefined
+          ? `Roblox RAP threshold: ${result.minimumRap.toLocaleString()}`
+          : null,
+        result.scanElapsedMs !== undefined
+          ? `Scan time: ${Math.round(result.scanElapsedMs / 1000)}s`
+          : null,
+      ].filter(Boolean).join("\n"),
     )
     .addFields({
       name: "Sources",
@@ -116,7 +180,10 @@ function buildGameTargetEmbeds(result) {
       .addFields(
         {
           name: "Roblox RAP",
-          value: `${player.rapIsPartial ? "At least " : ""}${player.rapValue.toLocaleString()} RAP`,
+          value:
+            typeof player.rapValue === "number"
+              ? `${player.rapIsPartial ? "At least " : ""}${player.rapValue.toLocaleString()} RAP`
+              : "Not required",
           inline: true,
         },
         {
