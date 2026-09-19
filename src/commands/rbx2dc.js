@@ -9,22 +9,31 @@ export const rbx2dcCommand = {
     .addStringOption((option) =>
       option
         .setName("username")
-        .setDescription("The Roblox username to look up.")
+        .setDescription("Roblox username, user ID, or profile URL.")
         .setRequired(true)
         .setMinLength(1)
-        .setMaxLength(20),
+        .setMaxLength(100),
     ),
 
   async execute(interaction) {
-    const username = interaction.options.getString("username", true).trim();
+    const identifier = interaction.options.getString("username", true).trim();
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      const user = await lookupRobloxUser(username);
+      const profileIdMatch = identifier.match(/roblox\.com\/users\/(\d+)/i);
+      const numericId = /^\d+$/.test(identifier)
+        ? Number(identifier)
+        : profileIdMatch
+          ? Number(profileIdMatch[1])
+          : null;
+
+      const user = Number.isInteger(numericId) && numericId > 0
+        ? { id: numericId, name: null }
+        : await lookupRobloxUser(identifier);
 
       if (!user) {
         await interaction.editReply(
-          `No Roblox user was found for "${username}".`,
+          `No Roblox user was found for "${identifier}".`,
         );
         return;
       }
@@ -34,6 +43,7 @@ export const rbx2dcCommand = {
         association = await lookupRobloxToDiscord({
           userId: user.id,
           username: user.name,
+          guildId: interaction.guildId,
         });
       } catch (sourceError) {
         console.warn("Roblox-to-Discord public source failed:", sourceError);
@@ -41,7 +51,7 @@ export const rbx2dcCommand = {
 
       await interaction.editReply(
         [
-          `**Roblox user:** ${user.name}`,
+          `**Roblox user:** ${user.name ?? `ID ${user.id}`}`,
           `**Discord username or user ID:** ${
             association?.discordUsername ??
             association?.discordId ??
@@ -53,8 +63,16 @@ export const rbx2dcCommand = {
                   ? ` ([evidence](${association.evidenceUrl}))`
                   : ""
               }`
-            : "No verified public Roblox-to-Discord mapping was available.",
-        ].join("\n"),
+            : "No verified Roblox-to-Discord mapping was available.",
+          association?.corroborated
+            ? "**Verification:** Corroborated by multiple configured sources"
+            : association
+              ? "**Verification:** Verified by source"
+              : null,
+          association?.conflict
+            ? "**Warning:** Providers returned conflicting Discord IDs."
+            : null,
+        ].filter(Boolean).join("\n"),
       );
     } catch (error) {
       console.error("Could not resolve Roblox-to-Discord lookup:", error);
