@@ -192,7 +192,7 @@ function buildProfileComponents(profile, interactionId, page, totalPages) {
     new ButtonBuilder().setLabel("Rolimon's").setStyle(ButtonStyle.Link).setURL(getRolimonsProfileUrl(profile.id)),
   ];
   if (profile.currentGame?.gameUrl) {
-    links.push(new ButtonBuilder().setLabel("Open game").setStyle(ButtonStyle.Link).setURL(profile.currentGame.gameUrl));
+    links.push(new ButtonBuilder().setLabel("Open in Roblox").setStyle(ButtonStyle.Link).setURL(profile.currentGame.gameUrl));
   }
   if (profile.currentGame?.joinUrl) {
     links.push(new ButtonBuilder().setLabel("Join exact server").setStyle(ButtonStyle.Link).setURL(profile.currentGame.joinUrl));
