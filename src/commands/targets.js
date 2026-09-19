@@ -72,6 +72,8 @@ function buildTargetEmbeds(result) {
         `Cooling down from recent scans: ${result.recentlyCheckedSkipped ?? 0}`,
         `Roblox search candidates this refresh: ${result.candidateSourceCounts?.userSearch ?? 0}`,
         `Roblox social-graph candidates this refresh: ${result.candidateSourceCounts?.socialGraph ?? 0}`,
+        `Rolimon's trade-ad candidates this refresh: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
+        `Rolimon's limited-owner candidates this refresh: ${result.candidateSourceCounts?.limitedOwners ?? 0}`,
         `Active candidates checked: ${result.activeCount ?? 0}`,
         `RAP threshold: ${result.minimumRap.toLocaleString()}`,
       ]
