@@ -1,14 +1,13 @@
 import {
   getAvatarThumbnail,
-  getAssetOwners,
   getGameDetails,
   getRobloxUserById,
+  getUserFriends,
   getUsersPresence,
+  searchRobloxUsers,
 } from "../roblox/api.js";
 import { getInventorySummary } from "../roblox/inventory.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
-import { getRolimonsItems } from "../sources/rolimons-items.js";
-import { getRecentTradeAdPlayers } from "../sources/rolimons-trade-ads.js";
 import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
 
@@ -29,8 +28,6 @@ const GAME_TARGETS = {
   },
 };
 
-const DEFAULT_SEED_ITEM_COUNT = 12;
-const DEFAULT_OWNERS_PER_ITEM = 20;
 const DEFAULT_MAX_CANDIDATES = 500;
 const DEFAULT_GAME_SCAN_CANDIDATES = 1_200;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
@@ -38,34 +35,34 @@ const DEFAULT_POOL_MAX_SIZE = 5_000;
 const DEFAULT_POOL_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
 const TARGET_POOL_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+const SEARCH_TERMS_PER_REFRESH = 12;
+const SOCIAL_SEEDS_PER_REFRESH = 10;
+const SEARCH_CONCURRENCY = 4;
+const SOCIAL_CONCURRENCY = 4;
+const PRESENCE_BATCH_SIZE = 50;
+const VERIFY_CONCURRENCY = 5;
+
+const SEARCH_TERMS = [
+  "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p",
+  "q","r","s","t","u","v","w","x","y","z",
+  "pro","king","queen","dark","shadow","cool","game","player","star","wolf",
+  "dragon","ninja","blue","red","green","gold","fire","ice","the","xx",
+  "yt","tv","boy","girl","roblox","master","elite","legend","nova","sky",
+  "moon","sun","cat","dog","max","ace","zero","neo","rex","leo"
+];
 
 const candidatePool = new Map();
 let targetPoolWarmupTimer = null;
-const DEFAULT_SEED_MIN_ITEM_RAP = 75_000;
-const PRESENCE_BATCH_SIZE = 50;
-const OWNER_CONCURRENCY = 4;
-const VERIFY_CONCURRENCY = 5;
-const OWNER_DISCOVERY_BUDGET_MS = 12_000;
+let searchTermCursor = 0;
 
 export function startTargetCandidatePoolWarmup() {
   if (targetPoolWarmupTimer) return;
 
   const refresh = async () => {
     try {
-      const result = await getRecentTradeAdPlayers({ force: true });
-      const userIds = result.players
-        .map((player) => Number(player.userId))
-        .filter((userId) => Number.isInteger(userId) && userId > 0);
-
-      addCandidatesToPool(
-        userIds,
-        "Rolimon's recent trade ads (background refresh)",
-        Date.now(),
-      );
-      pruneCandidatePool();
-
+      const stats = await refreshGeneralCandidatePool();
       console.info(
-        `Target candidate pool refreshed in background: +${new Set(userIds).size} seen, ${candidatePool.size} pooled.`,
+        `General target pool refresh: +${stats.userSearch} search users, +${stats.socialGraph} social users, ${candidatePool.size} pooled.`,
       );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
@@ -93,16 +90,15 @@ export async function scanDiscoveredTargets({
     return {
       minimumRap,
       players: [],
-      seedItems: discovery.seedItems,
       candidateCount: 0,
-      candidateSourceCounts: discovery.candidateSourceCounts,
       candidatePoolSize: discovery.candidatePoolSize,
       freshCandidateCount: discovery.freshCandidateCount,
       recentlyCheckedSkipped: discovery.recentlyCheckedSkipped,
+      candidateSourceCounts: discovery.candidateSourceCounts,
       activeCount: 0,
       verifiedCount: 0,
       sources: discovery.sources,
-      skipped: "No candidates were returned by the discovery sources.",
+      skipped: "No candidates were returned by the general discovery sources.",
     };
   }
 
@@ -146,24 +142,19 @@ export async function scanDiscoveredTargets({
       }
     }
 
-    if (verifiedPlayers.length >= requestedLimit) {
-      break;
-    }
+    if (verifiedPlayers.length >= requestedLimit) break;
   }
-
-  const players = shuffle(verifiedPlayers)
-    .slice(0, requestedLimit)
-    .map(({ qualifies, ...player }) => player);
 
   return {
     minimumRap,
-    players,
-    seedItems: discovery.seedItems,
+    players: shuffle(verifiedPlayers)
+      .slice(0, requestedLimit)
+      .map(({ qualifies, ...player }) => player),
     candidateCount: discovery.userIds.length,
-    candidateSourceCounts: discovery.candidateSourceCounts,
     candidatePoolSize: discovery.candidatePoolSize,
     freshCandidateCount: discovery.freshCandidateCount,
     recentlyCheckedSkipped: discovery.recentlyCheckedSkipped,
+    candidateSourceCounts: discovery.candidateSourceCounts,
     activeCount: activePresences.length,
     verifiedCount: verifiedPlayers.length,
     sources: [
@@ -171,7 +162,7 @@ export async function scanDiscoveredTargets({
         ...discovery.sources,
         "Roblox public presence",
         "Roblox public collectibles inventory",
-        "Rolimon's public player info",
+        "Rolimon's public player info (RAP/value cross-check only)",
       ]),
     ],
   };
@@ -192,8 +183,6 @@ export async function scanGameTargets({
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
   );
 
-  // Refresh the same candidate pool used by /target, then inspect the pool for
-  // players currently active in the requested experience.
   const discovery = await discoverCandidateUserIds(minimumRap, {
     respectCooldown: false,
     maxCandidatesOverride: getPositiveIntegerEnv(
@@ -226,7 +215,11 @@ export async function scanGameTargets({
   );
 
   const verifiedPlayers = [];
-  for (let index = 0; index < gamePresences.length; index += VERIFY_CONCURRENCY) {
+  for (
+    let index = 0;
+    index < gamePresences.length;
+    index += VERIFY_CONCURRENCY
+  ) {
     const batch = gamePresences.slice(index, index + VERIFY_CONCURRENCY);
     const batchResults = await Promise.all(
       batch.map((presence) =>
@@ -246,9 +239,7 @@ export async function scanGameTargets({
       }
     }
 
-    if (verifiedPlayers.length >= requestedLimit) {
-      break;
-    }
+    if (verifiedPlayers.length >= requestedLimit) break;
   }
 
   return {
@@ -269,7 +260,7 @@ export async function scanGameTargets({
         ...discovery.sources,
         "Roblox public presence",
         "Roblox public collectibles inventory",
-        "Rolimon's public player info",
+        "Rolimon's public player info (RAP/value cross-check only)",
       ]),
     ],
   };
@@ -288,14 +279,8 @@ async function discoverCandidateUserIds(
   minimumRap,
   { respectCooldown = true, maxCandidatesOverride = null } = {},
 ) {
-  const seedItemCount = getPositiveIntegerEnv(
-    "ROBLOX_TARGET_SEED_ITEM_COUNT",
-    DEFAULT_SEED_ITEM_COUNT,
-  );
-  const ownersPerItem = getPositiveIntegerEnv(
-    "ROBLOX_TARGET_OWNERS_PER_ITEM",
-    DEFAULT_OWNERS_PER_ITEM,
-  );
+  void minimumRap;
+
   const maxCandidates =
     Number.isInteger(Number(maxCandidatesOverride)) &&
     Number(maxCandidatesOverride) > 0
@@ -304,173 +289,114 @@ async function discoverCandidateUserIds(
           "ROBLOX_TARGET_MAX_CANDIDATES",
           DEFAULT_MAX_CANDIDATES,
         );
-  const configuredSeedFloor = getPositiveIntegerEnv(
-    "ROBLOX_TARGET_SEED_MIN_ITEM_RAP",
-    DEFAULT_SEED_MIN_ITEM_RAP,
-  );
-  const seedFloor = Math.min(configuredSeedFloor, minimumRap);
 
-  const [tradeAdsResult, itemCatalogResult] = await Promise.allSettled([
-    getRecentTradeAdPlayers(),
-    getRolimonsItems(),
-  ]);
-
-  const sources = [];
-  const candidateSourceCounts = {
-    tradeAds: 0,
-    assetOwners: 0,
-  };
-
-  const tradeAdCandidates =
-    tradeAdsResult.status === "fulfilled"
-      ? shuffle(
-          tradeAdsResult.value.players
-            .map((player) => Number(player.userId))
-            .filter((userId) => Number.isInteger(userId) && userId > 0),
-        )
-      : [];
-
-  if (tradeAdsResult.status === "fulfilled") {
-    sources.push(
-      `Rolimon's recent trade ads (${tradeAdsResult.value.sourceUrl})`,
-    );
-    candidateSourceCounts.tradeAds = new Set(tradeAdCandidates).size;
-  } else {
-    console.warn("Rolimon's trade-ad discovery failed:", tradeAdsResult.reason);
-  }
-
-  let seedItems = [];
-  let ownerCandidates = [];
-
-  if (itemCatalogResult.status === "fulfilled") {
-    const dataset = itemCatalogResult.value;
-    sources.push(
-      `Rolimon's limited catalog (${dataset.sourceUrl ?? "public API"})`,
-    );
-
-    const tradeAdItemIds =
-      tradeAdsResult.status === "fulfilled"
-        ? tradeAdsResult.value.itemIds
-        : [];
-
-    const tradeableSeeds = shuffle(
-      tradeAdItemIds
-        .map((itemId) => dataset.byId.get(String(itemId)))
-        .filter(Boolean)
-        .filter(
-          (item) =>
-            Math.max(Number(item.rap) || 0, Number(item.value) || 0) >=
-            seedFloor,
-        ),
-    );
-
-    const catalogSeeds = shuffle(
-      dataset.items.filter(
-        (item) =>
-          Math.max(Number(item.rap) || 0, Number(item.value) || 0) >=
-          seedFloor,
-      ),
-    );
-
-    seedItems = takeUniqueItems(
-      [...tradeableSeeds, ...catalogSeeds],
-      seedItemCount,
-    );
-
-    const ownerDiscoveryPromise = discoverOwnersFromSeeds(
-      seedItems,
-      ownersPerItem,
-    );
-
-    ownerCandidates = await withTimeout(
-      ownerDiscoveryPromise,
-      OWNER_DISCOVERY_BUDGET_MS,
-      [],
-    );
-
-    if (ownerCandidates.length > 0) {
-      candidateSourceCounts.assetOwners = new Set(ownerCandidates).size;
-      sources.push(
-        process.env.ROBLOX_OWNER_USE_COOKIE === "true" &&
-        process.env.ROBLOX_SESSION_COOKIE
-          ? "Roblox asset owners (authenticated first, public fallback)"
-          : "Roblox public asset owners",
-      );
-    } else {
-      sources.push("Roblox asset owners (no candidates returned this pass)");
-    }
-  } else {
-    console.warn("Rolimon's item catalog discovery failed:", itemCatalogResult.reason);
-  }
-
+  const candidateSourceCounts = await refreshGeneralCandidatePool();
   const now = Date.now();
-  addCandidatesToPool(tradeAdCandidates, "Rolimon's recent trade ads", now);
-  addCandidatesToPool(ownerCandidates, "Roblox asset owners", now);
-  pruneCandidatePool(now);
-
   const selection = selectCandidatesFromPool(maxCandidates, now, {
     respectCooldown,
   });
-  const userIds = selection.userIds;
-
-  console.info(
-    `Target discovery: ${candidateSourceCounts.tradeAds} trade-ad candidates, ${candidateSourceCounts.assetOwners} owner candidates, ${candidatePool.size} pooled, ${selection.freshCount} fresh selected, ${selection.recentlyCheckedSkipped} cooling down.`,
-  );
 
   return {
-    userIds,
-    seedItems: seedItems.map((item) => ({
-      id: item.id,
-      name: item.name,
-      rap: item.rap,
-      value: item.value,
-    })),
+    userIds: selection.userIds,
     candidateSourceCounts,
     candidatePoolSize: candidatePool.size,
     freshCandidateCount: selection.freshCount,
     recentlyCheckedSkipped: selection.recentlyCheckedSkipped,
-    sources,
+    sources: [
+      "Roblox public user search",
+      "Roblox public friends graph",
+    ],
   };
 }
 
-async function discoverOwnersFromSeeds(seedItems, ownersPerItem) {
-  if (seedItems.length === 0) return [];
+async function refreshGeneralCandidatePool() {
+  const terms = nextSearchTerms(SEARCH_TERMS_PER_REFRESH);
 
-  const ownerResults = await mapWithConcurrency(
-    seedItems,
-    OWNER_CONCURRENCY,
-    async (item) => {
+  const searchResults = await mapWithConcurrency(
+    terms,
+    SEARCH_CONCURRENCY,
+    async (term) => {
       try {
-        const result = await getAssetOwners(item.id, {
-          limit: ownersPerItem,
-        });
-        return { item, owners: result.owners };
+        const result = await searchRobloxUsers(term, { limit: 10 });
+        return result.users;
       } catch (error) {
-        console.warn(
-          `Owner discovery failed for ${item.name} (${item.id}):`,
-          error,
-        );
-        return { item, owners: [] };
+        console.warn(`Roblox user search failed for "${term}":`, error);
+        return [];
       }
     },
   );
 
-  const userIds = [];
-  const seen = new Set();
+  const searchUserIds = [
+    ...new Set(
+      searchResults
+        .flat()
+        .map((user) => Number(user?.id))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
 
-  for (const result of shuffle(ownerResults)) {
-    for (const owner of shuffle(result.owners)) {
-      const userId = Number(owner.userId);
-      if (!Number.isInteger(userId) || userId <= 0 || seen.has(userId)) {
-        continue;
+  const now = Date.now();
+  addCandidatesToPool(searchUserIds, "Roblox public user search", now);
+
+  const socialSeeds = selectSocialExpansionSeeds(SOCIAL_SEEDS_PER_REFRESH);
+  const socialResults = await mapWithConcurrency(
+    socialSeeds,
+    SOCIAL_CONCURRENCY,
+    async (candidate) => {
+      try {
+        const friends = await getUserFriends(candidate.userId);
+        candidate.lastSocialExpandedAt = Date.now();
+        return friends;
+      } catch (error) {
+        candidate.lastSocialExpandedAt = Date.now();
+        console.warn(
+          `Roblox friend expansion failed for user ${candidate.userId}:`,
+          error,
+        );
+        return [];
       }
+    },
+  );
 
-      seen.add(userId);
-      userIds.push(userId);
-    }
+  const socialUserIds = [
+    ...new Set(
+      socialResults
+        .flat()
+        .map((user) => Number(user?.id))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
+  addCandidatesToPool(
+    socialUserIds,
+    "Roblox public friends graph",
+    Date.now(),
+  );
+  pruneCandidatePool();
+
+  return {
+    userSearch: searchUserIds.length,
+    socialGraph: socialUserIds.length,
+  };
+}
+
+function selectSocialExpansionSeeds(limit) {
+  return [...candidatePool.values()]
+    .sort(
+      (left, right) =>
+        (left.lastSocialExpandedAt || 0) -
+        (right.lastSocialExpandedAt || 0),
+    )
+    .slice(0, Math.max(1, limit));
+}
+
+function nextSearchTerms(count) {
+  const terms = [];
+  for (let index = 0; index < count; index += 1) {
+    terms.push(SEARCH_TERMS[searchTermCursor % SEARCH_TERMS.length]);
+    searchTermCursor += 1;
   }
-
-  return userIds;
+  return terms;
 }
 
 async function buildDiscoveredTargetPlayer(presence, minimumRap) {
@@ -501,10 +427,7 @@ async function buildDiscoveredTargetPlayer(presence, minimumRap) {
   );
 
   if (typeof rapValue !== "number" || rapValue < minimumRap) {
-    return {
-      qualifies: false,
-      id: userId,
-    };
+    return { qualifies: false, id: userId };
   }
 
   let gameName = presence.lastLocation ?? "Online";
@@ -640,6 +563,7 @@ function addCandidatesToPool(userIds, source, now = Date.now()) {
       firstSeenAt: now,
       lastSeenAt: now,
       lastCheckedAt: 0,
+      lastSocialExpandedAt: 0,
       sources: new Set(),
     };
 
@@ -723,9 +647,7 @@ function markCandidatesChecked(userIds, now = Date.now()) {
   for (const rawUserId of userIds) {
     const userId = Number(rawUserId);
     const candidate = candidatePool.get(userId);
-    if (candidate) {
-      candidate.lastCheckedAt = now;
-    }
+    if (candidate) candidate.lastCheckedAt = now;
   }
 }
 
@@ -748,64 +670,6 @@ async function mapWithConcurrency(items, concurrency, mapper) {
     ),
   );
   return results;
-}
-
-function takeUniqueItems(items, limit) {
-  const result = [];
-  const seen = new Set();
-
-  for (const item of items) {
-    const id = Number(item?.id);
-    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
-    seen.add(id);
-    result.push(item);
-    if (result.length >= limit) break;
-  }
-
-  return result;
-}
-
-function roundRobinUnique(buckets, limit) {
-  const normalized = buckets.map((bucket) => [...bucket]);
-  const result = [];
-  const seen = new Set();
-  let madeProgress = true;
-
-  while (result.length < limit && madeProgress) {
-    madeProgress = false;
-
-    for (const bucket of normalized) {
-      while (bucket.length > 0) {
-        const value = Number(bucket.shift());
-        if (!Number.isInteger(value) || value <= 0 || seen.has(value)) {
-          continue;
-        }
-
-        seen.add(value);
-        result.push(value);
-        madeProgress = true;
-        break;
-      }
-
-      if (result.length >= limit) break;
-    }
-  }
-
-  return result;
-}
-
-async function withTimeout(promise, timeoutMs, fallback) {
-  let timeoutId;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((resolve) => {
-        timeoutId = setTimeout(() => resolve(fallback), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }
 
 function getPresenceStatus(type) {
