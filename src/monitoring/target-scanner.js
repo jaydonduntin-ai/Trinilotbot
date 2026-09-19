@@ -21,6 +21,7 @@ import {
   searchRobloxUsers,
 } from "../roblox/api.js";
 import { getInventorySummary } from "../roblox/inventory.js";
+import { getPublicJoinUrl } from "../roblox/game-session.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
 import {
   enrichInventoryWithRolimons,
@@ -462,6 +463,8 @@ export async function scanDiscoveredTargets({
         profileUnavailableCount: 0,
         verificationErrorCount: 0,
         preRecheckVerifiedCount: cachedVerified.length,
+        joinReadyCount: finalCached.players.filter((player) => player.joinReady).length,
+        publicServerConfirmedCount: finalCached.players.filter((player) => player.publicServerConfirmed).length,
         liveCacheHit: true,
         liveCacheSize: liveTargetCache.size,
         verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
@@ -659,6 +662,8 @@ export async function scanDiscoveredTargets({
     profileUnavailableCount,
     verificationErrorCount,
     preRecheckVerifiedCount: verifiedPlayers.length,
+    joinReadyCount: stillInGamePlayers.players.filter((player) => player.joinReady).length,
+    publicServerConfirmedCount: stillInGamePlayers.players.filter((player) => player.publicServerConfirmed).length,
     liveCacheHit: false,
     liveCacheSize: liveTargetCache.size,
     verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
@@ -2320,6 +2325,7 @@ async function buildDiscoveredTargetPlayer(
         console.warn(`Could not load target game ${presence.universeId}:`, error);
       }
     }
+    const joinability = await buildTargetJoinability(presence, userId);
 
     return {
       qualifies: true,
@@ -2332,6 +2338,7 @@ async function buildDiscoveredTargetPlayer(
       rolimonsUrl: getRolimonsProfileUrl(userId),
       presenceStatus: getPresenceStatus(presence.userPresenceType),
       gameName,
+      ...joinability,
       rapValue: Number(candidate.lastKnownRap),
       rapSource:
         candidate.lastKnownRapSource ?? "Recently verified public RAP",
@@ -2470,6 +2477,8 @@ async function buildDiscoveredTargetPlayer(
     }
   }
 
+  const joinability = await buildTargetJoinability(presence, userId);
+
   const gameValueResult = await Promise.allSettled([
     scanGameValue({
       gameName,
@@ -2493,6 +2502,7 @@ async function buildDiscoveredTargetPlayer(
     rolimonsUrl: getRolimonsProfileUrl(userId),
     presenceStatus: getPresenceStatus(presence.userPresenceType),
     gameName,
+    ...joinability,
     rapValue,
     rapSource,
     rapIsPartial,
@@ -2501,6 +2511,36 @@ async function buildDiscoveredTargetPlayer(
     premiumStatus: rolimons?.premiumStatus ?? "Unavailable",
     gameValue,
     topLimiteds: getTopLimiteds(inventory),
+  };
+}
+
+async function buildTargetJoinability(presence, userId) {
+  const normalizedUserId = Number(userId);
+  const placeId = Number(presence?.placeId);
+  const gameId = presence?.gameId ? String(presence.gameId) : null;
+
+  const followJoinUrl =
+    Number.isInteger(normalizedUserId) && normalizedUserId > 0
+      ? `https://www.roblox.com/games/start?userId=${encodeURIComponent(normalizedUserId)}`
+      : null;
+
+  let exactJoinUrl = null;
+  if (Number.isInteger(placeId) && placeId > 0 && gameId) {
+    exactJoinUrl = await getPublicJoinUrl(presence);
+  }
+
+  return {
+    placeId: Number.isInteger(placeId) && placeId > 0 ? placeId : null,
+    gameId,
+    followJoinUrl,
+    exactJoinUrl,
+    joinReady: Boolean(followJoinUrl),
+    publicServerConfirmed: Boolean(exactJoinUrl),
+    joinabilityStatus: exactJoinUrl
+      ? "Public server confirmed"
+      : followJoinUrl
+        ? "Profile follow-join available"
+        : "Unavailable",
   };
 }
 
@@ -2631,8 +2671,22 @@ async function revalidateCurrentlyInGame(players) {
         ...player,
         presenceStatus: "In game",
         gameName: presence?.lastLocation || player.gameName,
+        placeId: presence?.placeId ?? player.placeId ?? null,
+        gameId: presence?.gameId ?? player.gameId ?? null,
+        followJoinUrl:
+          player.followJoinUrl ??
+          `https://www.roblox.com/games/start?userId=${encodeURIComponent(player.id)}`,
         presenceVerifiedAt: Date.now(),
       };
+    })
+    .sort((left, right) => {
+      if (left.publicServerConfirmed !== right.publicServerConfirmed) {
+        return Number(right.publicServerConfirmed) - Number(left.publicServerConfirmed);
+      }
+      if (left.joinReady !== right.joinReady) {
+        return Number(right.joinReady) - Number(left.joinReady);
+      }
+      return 0;
     });
 
   return {
