@@ -5,6 +5,8 @@ const RBLXVALUE_BASE_URL = "https://api.rblxvalue.com/v2";
 const RBLXVALUE_SOURCE_URL = "https://rblxvalue.com";
 const REQUEST_TIMEOUT_MS = 8_000;
 const INVENTORY_TTL_MS = 5 * 60 * 1000;
+const PROFILE_TTL_MS = 5 * 60 * 1000;
+const MAX_RETRIES = 2;
 
 registerProvider({
   name: "rblxvalue-mm2-inventory",
@@ -12,7 +14,7 @@ registerProvider({
   query: getRblxValueInventory,
 });
 
-async function getRblxValueInventory({ username, userId }) {
+export async function getRblxValueInventory({ username, userId }) {
   const apiKey = process.env.ROBLOX_RBLXVALUE_API_KEY?.trim();
   const lookup = String(userId ?? username ?? "").trim();
   if (!apiKey || !lookup) return null;
@@ -22,20 +24,142 @@ async function getRblxValueInventory({ username, userId }) {
     cacheKey,
     async () => {
       const url = `${RBLXVALUE_BASE_URL}/inventory/${encodeURIComponent(lookup)}`;
-      const response = await fetch(url, {
-        headers: { Accept: "application/json", "X-Api-Key": apiKey },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-
-      if (!response.ok) {
-        throw new Error(`RBLXValue v2 inventory returned HTTP ${response.status}.`);
-      }
-
-      const payload = await response.json();
+      const payload = await fetchRblxValueJson(
+        url,
+        apiKey,
+        "inventory",
+      );
       return normalizeInventory(payload, username ?? lookup, url);
     },
     INVENTORY_TTL_MS,
   );
+}
+
+export async function getRblxValueProfile({
+  username,
+  userId,
+}) {
+  const apiKey = process.env.ROBLOX_RBLXVALUE_API_KEY?.trim();
+  const lookup = String(userId ?? username ?? "").trim();
+  if (!apiKey || !lookup) return null;
+
+  const cacheKey = `rblxvalue:mm2:profile:${lookup.toLowerCase()}`;
+  return providerCache.getOrSet(
+    cacheKey,
+    async () => {
+      const url = `${RBLXVALUE_BASE_URL}/profile/${encodeURIComponent(lookup)}`;
+      const payload = await fetchRblxValueJson(
+        url,
+        apiKey,
+        "profile",
+      );
+      return normalizeProfile(payload, username ?? lookup, url);
+    },
+    PROFILE_TTL_MS,
+  );
+}
+
+function normalizeProfile(payload, username, sourceUrl) {
+  const data = payload?.profile ?? payload?.data ?? payload ?? {};
+  const totalValue = toNonNegativeNumber(
+    data?.total_value ??
+      data?.totalValue ??
+      data?.inventory_value ??
+      data?.inventoryValue ??
+      data?.value,
+  );
+  const itemCount = toNonNegativeNumber(
+    data?.item_count ??
+      data?.itemCount ??
+      data?.inventory_count ??
+      data?.inventoryCount,
+  );
+
+  if (totalValue === null) {
+    return {
+      status: "unavailable",
+      game: "MM2",
+      username,
+      reason: String(
+        payload?.error ??
+          payload?.message ??
+          "RBLXValue profile returned no MM2 inventory value.",
+      ),
+      source: "RBLXValue API v2",
+      sourceUrl: getHttpsUrl(sourceUrl),
+      retrievedAt: new Date().toISOString(),
+    };
+  }
+
+  return {
+    status: "verified",
+    game: "MM2",
+    username:
+      data?.username ??
+      data?.name ??
+      username,
+    totalValue,
+    itemCount,
+    currency: "value",
+    source: "RBLXValue API v2 profile",
+    sourceUrl: getHttpsUrl(sourceUrl),
+    credit:
+      typeof payload?.credit === "string"
+        ? payload.credit
+        : "Data from rblxvalue.com",
+    retrievedAt: new Date().toISOString(),
+  };
+}
+
+async function fetchRblxValueJson(url, apiKey, routeLabel) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          Accept: "application/json",
+          "X-Api-Key": apiKey,
+        },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+
+      if (response.ok) {
+        return response.json();
+      }
+
+      const error = new Error(
+        `RBLXValue v2 ${routeLabel} returned HTTP ${response.status}.`,
+      );
+      error.status = response.status;
+
+      if (response.status !== 429 || attempt >= MAX_RETRIES) {
+        throw error;
+      }
+
+      const retryAfterSeconds = Number(
+        response.headers.get("retry-after"),
+      );
+      const delayMs = Number.isFinite(retryAfterSeconds)
+        ? Math.max(1_000, retryAfterSeconds * 1000)
+        : 1_500 * 2 ** attempt;
+      await sleep(delayMs);
+      lastError = error;
+    } catch (error) {
+      lastError = error;
+      if (Number(error?.status) !== 429 || attempt >= MAX_RETRIES) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError ?? new Error(
+    `RBLXValue v2 ${routeLabel} request failed.`,
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeInventory(payload, username, sourceUrl) {
