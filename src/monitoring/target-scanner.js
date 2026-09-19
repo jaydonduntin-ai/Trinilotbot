@@ -57,6 +57,8 @@ const DEFAULT_MAX_CANDIDATES = 500;
 const DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES = 2_500;
 const DEFAULT_TARGET_SCAN_WAVE_SIZE = 500;
 const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 45_000;
+const DEFAULT_TRUSTED_RAP_TTL_MS = 15 * 60 * 1000;
+const FINAL_RECHECK_BATCH_SIZE = 10;
 const DEFAULT_GAME_SCAN_CANDIDATES = 1_200;
 const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 25_000;
 const DEFAULT_GAME_SCAN_WAVE_SIZE = 300;
@@ -879,6 +881,10 @@ async function discoverCandidateUserIds({
           DEFAULT_MAX_CANDIDATES,
         );
 
+  // Newly verified /scan users must be available to the very next /target
+  // call; the broader source refresh can continue in the background.
+  await syncWatchlistCandidates();
+
   if (candidatePool.size === 0) {
     await withTimeout(refreshCandidatePool(), 8_000, null);
   } else {
@@ -930,37 +936,53 @@ async function refreshCandidatePool() {
   return candidateRefreshPromise;
 }
 
-async function refreshGeneralCandidatePool() {
-  const now = Date.now();
-
-  // Highest-signal source: users already verified by /scan at the configured RAP threshold.
-  // This turns the bot's accumulated watchlist into its own persistent discovery index.
+async function syncWatchlistCandidates(now = Date.now()) {
   const watchedPlayers = await getScanWatchlist().catch((error) => {
     console.warn("Could not load scan watchlist into target discovery:", error);
     return [];
   });
+
   const watchlistUserIds = watchedPlayers
     .map((player) => Number(player?.userId))
     .filter((userId) => Number.isInteger(userId) && userId > 0);
+
   addCandidatesToPool(
     watchlistUserIds,
     "Verified /scan RAP watchlist",
     now,
   );
+
   for (const player of watchedPlayers) {
     const candidate = candidatePool.get(Number(player?.userId));
     if (!candidate) continue;
+
+    const verifiedAt = Date.parse(
+      player?.rapVerifiedAt ?? player?.addedAt ?? "",
+    );
+    const rapVerifiedAt = Number.isFinite(verifiedAt) ? verifiedAt : 0;
+
     if (Number.isFinite(Number(player?.rapValue))) {
       candidate.lastKnownRap = Number(player.rapValue);
-      candidate.lastKnownRapAt = now;
+      candidate.lastKnownRapAt = rapVerifiedAt;
       candidate.lastKnownRapSource = "Verified /scan RAP watchlist";
     }
+
     if (Number.isFinite(Number(player?.totalValue))) {
       candidate.lastKnownValue = Number(player.totalValue);
-      candidate.lastKnownValueAt = now;
+      candidate.lastKnownValueAt = rapVerifiedAt;
       candidate.lastKnownValueSource = "Verified /scan RAP watchlist";
     }
   }
+
+  return watchlistUserIds;
+}
+
+async function refreshGeneralCandidatePool() {
+  const now = Date.now();
+
+  // Highest-signal source: users already verified by /scan at the configured RAP threshold.
+  // This turns the bot's accumulated watchlist into its own persistent discovery index.
+  const watchlistUserIds = await syncWatchlistCandidates(now);
 
   // Keep trade ads as one signal, but no longer make discovery depend on them.
   const tradeAdsResult = await getRecentTradeAdPlayers().catch((error) => {
@@ -1933,6 +1955,69 @@ async function buildDiscoveredTargetPlayer(
     return null;
   }
 
+  const candidate = candidatePool.get(userId);
+  const trustedRapTtlMs = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_TRUSTED_RAP_TTL_MS",
+    DEFAULT_TRUSTED_RAP_TTL_MS,
+  );
+  const hasFreshTrustedRap =
+    minimumValue === null &&
+    minimumRap !== null &&
+    Number.isFinite(Number(candidate?.lastKnownRap)) &&
+    Number(candidate.lastKnownRap) >= Number(minimumRap) &&
+    Number.isFinite(Number(candidate?.lastKnownRapAt)) &&
+    Date.now() - Number(candidate.lastKnownRapAt) <= trustedRapTtlMs;
+
+  if (hasFreshTrustedRap) {
+    const [userResult, avatarResult] = await Promise.allSettled([
+      getRobloxUserById(userId),
+      getAvatarThumbnail(userId),
+    ]);
+
+    const user =
+      userResult.status === "fulfilled" && userResult.value
+        ? userResult.value
+        : {
+            id: userId,
+            name: `user-${userId}`,
+            displayName: `Roblox user ${userId}`,
+          };
+
+    let gameName = presence.lastLocation ?? "Online";
+    if (presence.universeId) {
+      try {
+        const game = await getGameDetails(presence.universeId);
+        gameName = game?.name ?? gameName;
+      } catch (error) {
+        console.warn(`Could not load target game ${presence.universeId}:`, error);
+      }
+    }
+
+    return {
+      qualifies: true,
+      id: userId,
+      username: user.name ?? "Unavailable",
+      displayName: user.displayName ?? "Unavailable",
+      avatarUrl:
+        avatarResult.status === "fulfilled" ? avatarResult.value : null,
+      profileUrl: `https://www.roblox.com/users/${userId}/profile`,
+      rolimonsUrl: getRolimonsProfileUrl(userId),
+      presenceStatus: getPresenceStatus(presence.userPresenceType),
+      gameName,
+      rapValue: Number(candidate.lastKnownRap),
+      rapSource:
+        candidate.lastKnownRapSource ?? "Recently verified public RAP",
+      rapIsPartial: false,
+      totalValue: Number.isFinite(Number(candidate?.lastKnownValue))
+        ? Number(candidate.lastKnownValue)
+        : null,
+      valueSource: candidate.lastKnownValueSource ?? "Unavailable",
+      premiumStatus: "Unavailable",
+      gameValue: null,
+      topLimiteds: [],
+    };
+  }
+
   const [userResult, avatarResult, inventoryResult, rolimonsResult] =
     await Promise.allSettled([
       getRobloxUserById(userId),
@@ -1966,7 +2051,6 @@ async function buildDiscoveredTargetPlayer(
     }
   }
 
-  const candidate = candidatePool.get(userId);
   let { rapValue, rapSource, rapIsPartial } = chooseRapSource(
     inventory,
     rolimons,
@@ -2162,27 +2246,49 @@ async function revalidateCurrentlyInGame(players) {
     .map((player) => Number(player?.id))
     .filter((userId) => Number.isInteger(userId) && userId > 0);
 
-  // Final results must be confirmed live immediately before display.
-  // A failed recheck is treated as unverified, not as "still in game".
-  let liveCheck = await getPresenceBatched(userIds);
+  // Use two fresh final samples in small batches. A successful second sample
+  // is authoritative. If the second request does not return a user at all,
+  // fall back only to the first final sample, never the old initial presence.
+  const firstCheck = await getPresenceBatched(userIds, {
+    batchSize: FINAL_RECHECK_BATCH_SIZE,
+    maxAttempts: 3,
+    interBatchDelayMs: 60,
+  });
 
-  // Retry only users whose final presence could not be checked.
-  let checked = new Set(liveCheck.checkedIds.map(Number));
-  const missedIds = userIds.filter((userId) => !checked.has(userId));
-  if (missedIds.length > 0) {
-    await sleep(350);
-    const retry = await getPresenceBatched(missedIds);
-    liveCheck = {
-      presences: [...liveCheck.presences, ...retry.presences],
-      checkedIds: [...liveCheck.checkedIds, ...retry.checkedIds],
-    };
-    checked = new Set(liveCheck.checkedIds.map(Number));
+  await sleep(250);
+
+  const secondCheck = await getPresenceBatched(userIds, {
+    batchSize: FINAL_RECHECK_BATCH_SIZE,
+    maxAttempts: 3,
+    interBatchDelayMs: 60,
+  });
+
+  const firstByUserId = new Map(
+    firstCheck.presences.map((presence) => [
+      Number(presence.userId),
+      presence,
+    ]),
+  );
+  const secondByUserId = new Map(
+    secondCheck.presences.map((presence) => [
+      Number(presence.userId),
+      presence,
+    ]),
+  );
+  const secondCheckedIds = new Set(secondCheck.checkedIds.map(Number));
+
+  const decisiveByUserId = new Map();
+  for (const userId of userIds) {
+    const presence = secondCheckedIds.has(userId)
+      ? secondByUserId.get(userId)
+      : firstByUserId.get(userId);
+    if (presence) decisiveByUserId.set(userId, presence);
   }
 
   const inGameByUserId = new Map(
-    liveCheck.presences
-      .filter((presence) => Number(presence?.userPresenceType) === 2)
-      .map((presence) => [Number(presence.userId), presence]),
+    [...decisiveByUserId.entries()].filter(
+      ([, presence]) => Number(presence?.userPresenceType) === 2,
+    ),
   );
 
   const confirmedPlayers = players
@@ -2199,29 +2305,47 @@ async function revalidateCurrentlyInGame(players) {
 
   return {
     players: confirmedPlayers,
-    leftGameCount: players.filter(
-      (player) =>
-        checked.has(Number(player.id)) &&
-        !inGameByUserId.has(Number(player.id)),
-    ).length,
+    leftGameCount: players.filter((player) => {
+      const id = Number(player.id);
+      return (
+        decisiveByUserId.has(id) &&
+        !inGameByUserId.has(id)
+      );
+    }).length,
     unavailableCount: players.filter(
-      (player) => !checked.has(Number(player.id)),
+      (player) => !decisiveByUserId.has(Number(player.id)),
     ).length,
   };
 }
 
 export async function getPresenceBatched(
   userIds,
-  presenceFetcher = getUsersPresence,
+  optionsOrFetcher = getUsersPresence,
 ) {
+  const options =
+    typeof optionsOrFetcher === "function" ? {} : (optionsOrFetcher ?? {});
+  const presenceFetcher =
+    typeof optionsOrFetcher === "function"
+      ? optionsOrFetcher
+      : options.presenceFetcher ?? getUsersPresence;
+  const batchSize = Math.max(
+    1,
+    Number(options.batchSize) || PRESENCE_BATCH_SIZE,
+  );
+  const maxAttempts = Math.max(1, Number(options.maxAttempts) || 4);
+  const interBatchDelayMs = Math.max(
+    0,
+    Number(options.interBatchDelayMs) || 0,
+  );
+
   const presences = [];
   const checkedIds = [];
 
-  for (let index = 0; index < userIds.length; index += PRESENCE_BATCH_SIZE) {
-    const batch = userIds.slice(index, index + PRESENCE_BATCH_SIZE);
+  for (let index = 0; index < userIds.length; index += batchSize) {
+    const batch = userIds.slice(index, index + batchSize);
     let success = false;
 
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const result = await presenceFetcher(batch);
         presences.push(...result);
@@ -2239,7 +2363,7 @@ export async function getPresenceBatched(
           status === 408 ||
           status >= 500;
 
-        if (!retryable || attempt >= 3) {
+        if (!retryable || attempt >= maxAttempts - 1) {
           console.warn("Roblox presence batch failed:", error);
           break;
         }
@@ -2253,8 +2377,8 @@ export async function getPresenceBatched(
     }
 
     // Avoid bursting dozens of presence requests back-to-back.
-    if (success && index + PRESENCE_BATCH_SIZE < userIds.length) {
-      await sleep(120);
+    if (success && index + batchSize < userIds.length) {
+      await sleep(interBatchDelayMs || 120);
     }
   }
 
