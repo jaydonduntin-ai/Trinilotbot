@@ -3,11 +3,15 @@ import {
   getAssetOwners,
   getFriendGroupRoles,
   getGameDetails,
+  getRobloxGroupDetails,
+  getRobloxGroupRelationships,
   getRobloxGroupUsers,
+  getRobloxGroupWallPosters,
   getRobloxUserById,
   getUserFriends,
   getUserFollowers,
   getUserFollowings,
+  getUserPrimaryGroup,
   getUserRobloxGroups,
   getUsersPresence,
   searchMarketplaceItems,
@@ -67,6 +71,10 @@ const GROUP_SEARCH_TERMS_PER_REFRESH = 3;
 const GROUPS_PER_SEARCH_TERM = 2;
 const GROUP_MEMBERSHIP_SEEDS_PER_REFRESH = 4;
 const FRIEND_GROUP_SEEDS_PER_REFRESH = 4;
+const PRIMARY_GROUP_SEEDS_PER_REFRESH = 6;
+const GROUP_DETAIL_SEEDS_PER_REFRESH = 8;
+const GROUP_WALL_SEEDS_PER_REFRESH = 6;
+const GROUP_RELATIONSHIP_SEEDS_PER_REFRESH = 4;
 const GROUP_MEMBER_LIMIT = 50;
 const GROUP_CONCURRENCY = 3;
 const MARKETPLACE_OWNER_SEEDS = 8;
@@ -107,7 +115,7 @@ export function startTargetCandidatePoolWarmup() {
     try {
       const stats = await refreshGeneralCandidatePool();
       console.info(
-        `Target pool refresh: +${stats.userSearch} Roblox-search, +${stats.socialGraph} friends, +${stats.followers} followers, +${stats.followings} followings, +${stats.tradeAds} trade-ad, +${stats.rolimonsSearch} Rolimon's-search, +${stats.leaderboard} leaderboard, +${stats.limitedOwners} Rolimon's-owner, +${stats.marketplaceCreators} marketplace-creators, +${stats.marketplaceOwners} marketplace-owners, +${stats.marketplaceGroupMembers} marketplace-group-members, +${stats.groupSearchMembers} group-search, +${stats.groupGraphMembers} group-graph, +${stats.friendGroupMembers} friend-group users, ${candidatePool.size} pooled.`,
+        `Target pool refresh: +${stats.userSearch} Roblox-search, +${stats.socialGraph} friends, +${stats.followers} followers, +${stats.followings} followings, +${stats.tradeAds} trade-ad, +${stats.rolimonsSearch} Rolimon's-search, +${stats.leaderboard} leaderboard, +${stats.limitedOwners} Rolimon's-owner, +${stats.marketplaceCreators} marketplace-creators, +${stats.marketplaceOwners} marketplace-owners, +${stats.marketplaceGroupMembers} marketplace-group-members, +${stats.groupSearchMembers} group-search, +${stats.groupGraphMembers} group-graph, +${stats.friendGroupMembers} friend-group, +${stats.primaryGroupMembers} primary-group, +${stats.groupOwners} group-owner, +${stats.groupWallPosters} wall-poster, +${stats.allyGroupMembers} ally-group, +${stats.enemyGroupMembers} enemy-group users, ${candidatePool.size} pooled.`,
       );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
@@ -370,6 +378,11 @@ async function discoverCandidateUserIds(
       "Roblox Marketplace creators",
       "Roblox Marketplace collectible owners",
       "Roblox Marketplace creator-group members",
+      "Roblox public primary-group members",
+      "Roblox public group owners",
+      "Roblox public group wall posters",
+      "Roblox public allied-group members",
+      "Roblox public enemy-group members",
     ],
   };
 }
@@ -576,6 +589,11 @@ async function refreshGeneralCandidatePool() {
     groupSearchMembers: 0,
     groupGraphMembers: 0,
     friendGroupMembers: 0,
+    primaryGroupMembers: 0,
+    groupOwners: 0,
+    groupWallPosters: 0,
+    allyGroupMembers: 0,
+    enemyGroupMembers: 0,
   };
   if (Date.now() - lastGroupRefreshAt >= GROUP_REFRESH_INTERVAL_MS) {
     lastGroupRefreshAt = Date.now();
@@ -951,10 +969,246 @@ async function refreshGroupCandidateSources() {
     Date.now(),
   );
 
+  const primarySeeds = selectPrimaryGroupExpansionSeeds(
+    PRIMARY_GROUP_SEEDS_PER_REFRESH,
+  );
+  const primaryGroupResults = await mapWithConcurrency(
+    primarySeeds,
+    GROUP_CONCURRENCY,
+    async (candidate) => {
+      try {
+        const group = await getUserPrimaryGroup(candidate.userId);
+        candidate.lastPrimaryGroupExpandedAt = Date.now();
+        return group;
+      } catch (error) {
+        candidate.lastPrimaryGroupExpandedAt = Date.now();
+        console.warn(
+          `Roblox primary-group discovery failed for user ${candidate.userId}:`,
+          error,
+        );
+        return null;
+      }
+    },
+  );
+
+  const primaryGroupIds = [
+    ...new Set(
+      primaryGroupResults
+        .map((group) => Number(group?.id))
+        .filter((groupId) => Number.isInteger(groupId) && groupId > 0),
+    ),
+  ];
+
+  const primaryGroupMemberLists = await mapWithConcurrency(
+    primaryGroupIds.slice(0, 8),
+    GROUP_CONCURRENCY,
+    async (groupId) => {
+      try {
+        const result = await getRobloxGroupUsers(groupId, {
+          limit: GROUP_MEMBER_LIMIT,
+        });
+        return result.users;
+      } catch (error) {
+        console.warn(
+          `Roblox primary-group member discovery failed for group ${groupId}:`,
+          error,
+        );
+        return [];
+      }
+    },
+  );
+
+  const primaryGroupUserIds = [
+    ...new Set(
+      primaryGroupMemberLists
+        .flat()
+        .map((user) => Number(user?.id))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
+  addCandidatesToPool(
+    primaryGroupUserIds,
+    "Roblox public primary-group members",
+    Date.now(),
+  );
+
+  const discoveredGroupIds = shuffle([
+    ...new Set([
+      ...searchedGroupIds,
+      ...graphGroupIds,
+      ...friendGroupIds,
+      ...primaryGroupIds,
+    ]),
+  ]);
+
+  const detailGroupIds = discoveredGroupIds.slice(
+    0,
+    GROUP_DETAIL_SEEDS_PER_REFRESH,
+  );
+
+  const groupDetails = await mapWithConcurrency(
+    detailGroupIds,
+    GROUP_CONCURRENCY,
+    async (groupId) => {
+      try {
+        return await getRobloxGroupDetails(groupId);
+      } catch (error) {
+        console.warn(
+          `Roblox group-owner discovery failed for group ${groupId}:`,
+          error,
+        );
+        return null;
+      }
+    },
+  );
+
+  const groupOwnerUserIds = [
+    ...new Set(
+      groupDetails
+        .map((group) =>
+          Number(
+            group?.owner?.userId ??
+            group?.owner?.id ??
+            group?.ownerUserId,
+          ),
+        )
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
+  addCandidatesToPool(
+    groupOwnerUserIds,
+    "Roblox public group owners",
+    Date.now(),
+  );
+
+  const wallGroupIds = discoveredGroupIds.slice(
+    0,
+    GROUP_WALL_SEEDS_PER_REFRESH,
+  );
+  const wallResults = await mapWithConcurrency(
+    wallGroupIds,
+    GROUP_CONCURRENCY,
+    async (groupId) => {
+      try {
+        const result = await getRobloxGroupWallPosters(groupId, {
+          limit: 50,
+        });
+        return result.users;
+      } catch (error) {
+        console.warn(
+          `Roblox group-wall discovery failed for group ${groupId}:`,
+          error,
+        );
+        return [];
+      }
+    },
+  );
+
+  const wallPosterUserIds = [
+    ...new Set(
+      wallResults
+        .flat()
+        .map((user) => Number(user?.id))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
+  addCandidatesToPool(
+    wallPosterUserIds,
+    "Roblox public group wall posters",
+    Date.now(),
+  );
+
+  const relationshipGroupIds = discoveredGroupIds.slice(
+    0,
+    GROUP_RELATIONSHIP_SEEDS_PER_REFRESH,
+  );
+
+  async function expandRelatedGroups(relationshipType, sourceLabel) {
+    const relationshipResults = await mapWithConcurrency(
+      relationshipGroupIds,
+      GROUP_CONCURRENCY,
+      async (groupId) => {
+        try {
+          const result = await getRobloxGroupRelationships(
+            groupId,
+            relationshipType,
+            { limit: 50 },
+          );
+          return result.groups;
+        } catch (error) {
+          console.warn(
+            `Roblox ${relationshipType} relationship discovery failed for group ${groupId}:`,
+            error,
+          );
+          return [];
+        }
+      },
+    );
+
+    const relatedGroupIds = shuffle([
+      ...new Set(
+        relationshipResults
+          .flat()
+          .map((group) => Number(group?.id))
+          .filter((groupId) => Number.isInteger(groupId) && groupId > 0),
+      ),
+    ]).slice(0, 8);
+
+    const memberResults = await mapWithConcurrency(
+      relatedGroupIds,
+      GROUP_CONCURRENCY,
+      async (groupId) => {
+        try {
+          const result = await getRobloxGroupUsers(groupId, {
+            limit: GROUP_MEMBER_LIMIT,
+          });
+          return result.users;
+        } catch (error) {
+          console.warn(
+            `Roblox related-group member discovery failed for group ${groupId}:`,
+            error,
+          );
+          return [];
+        }
+      },
+    );
+
+    const userIds = [
+      ...new Set(
+        memberResults
+          .flat()
+          .map((user) => Number(user?.id))
+          .filter((userId) => Number.isInteger(userId) && userId > 0),
+      ),
+    ];
+
+    addCandidatesToPool(userIds, sourceLabel, Date.now());
+    return userIds;
+  }
+
+  const [allyGroupUserIds, enemyGroupUserIds] = await Promise.all([
+    expandRelatedGroups(
+      "Allies",
+      "Roblox public allied-group members",
+    ),
+    expandRelatedGroups(
+      "Enemies",
+      "Roblox public enemy-group members",
+    ),
+  ]);
+
   return {
     groupSearchMembers: groupSearchUserIds.length,
     groupGraphMembers: groupGraphUserIds.length,
     friendGroupMembers: friendGroupUserIds.length,
+    primaryGroupMembers: primaryGroupUserIds.length,
+    groupOwners: groupOwnerUserIds.length,
+    groupWallPosters: wallPosterUserIds.length,
+    allyGroupMembers: allyGroupUserIds.length,
+    enemyGroupMembers: enemyGroupUserIds.length,
   };
 }
 
@@ -1016,6 +1270,16 @@ function selectFriendGroupExpansionSeeds(limit) {
       (left, right) =>
         (left.lastFriendGroupExpandedAt || 0) -
         (right.lastFriendGroupExpandedAt || 0),
+    )
+    .slice(0, Math.max(1, limit));
+}
+
+function selectPrimaryGroupExpansionSeeds(limit) {
+  return [...candidatePool.values()]
+    .sort(
+      (left, right) =>
+        (left.lastPrimaryGroupExpandedAt || 0) -
+        (right.lastPrimaryGroupExpandedAt || 0),
     )
     .slice(0, Math.max(1, limit));
 }
@@ -1364,6 +1628,7 @@ function addCandidatesToPool(userIds, source, now = Date.now()) {
       lastFollowExpandedAt: 0,
       lastGroupExpandedAt: 0,
       lastFriendGroupExpandedAt: 0,
+      lastPrimaryGroupExpandedAt: 0,
       sources: new Set(),
     };
 
