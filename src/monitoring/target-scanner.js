@@ -379,16 +379,26 @@ export async function scanCandidatesForWatchlist({
   const verified = [];
   let checkedCount = 0;
 
-  const candidates = [...discovery.userIds].sort((leftId, rightId) =>
-    getCandidatePriority(
-      candidatePool.get(Number(rightId)),
-      { minimumValue, minimumRap },
-    ) -
-    getCandidatePriority(
-      candidatePool.get(Number(leftId)),
-      { minimumValue, minimumRap },
-    ),
+  // /scan is for expanding the verified pool. Do not spend the pass
+  // re-verifying users that are already on the watchlist.
+  const watchedIds = new Set(
+    (await getScanWatchlist())
+      .map((entry) => Number(entry?.userId))
+      .filter((userId) => Number.isInteger(userId) && userId > 0),
   );
+
+  const candidates = discovery.userIds
+    .filter((userId) => !watchedIds.has(Number(userId)))
+    .sort((leftId, rightId) =>
+      getCandidatePriority(
+        candidatePool.get(Number(rightId)),
+        { minimumValue, minimumRap },
+      ) -
+      getCandidatePriority(
+        candidatePool.get(Number(leftId)),
+        { minimumValue, minimumRap },
+      ),
+    );
 
   for (let index = 0; index < candidates.length; index += VERIFY_CONCURRENCY) {
     if (Date.now() - startedAt >= timeBudgetMs) break;
@@ -432,6 +442,7 @@ export async function scanCandidatesForWatchlist({
     minimumRap,
     minimumValue,
     checkedCount,
+    alreadyWatchedSkipped: watchedIds.size,
     candidatePoolSize: discovery.candidatePoolSize,
     candidateSourceCounts: discovery.candidateSourceCounts,
     scanElapsedMs: Date.now() - startedAt,
@@ -2423,10 +2434,18 @@ function selectCandidatesFromPool(
     DEFAULT_RECENT_CHECK_COOLDOWN_MS,
   );
 
+  const hotWatchlist = [];
   const fresh = [];
   const coolingDown = [];
 
   for (const candidate of candidatePool.values()) {
+    // Known 450k+ /scan hits are the hot pool for /target.
+    // They bypass the normal cooldown so every /target run checks them first.
+    if (candidate.sources?.has("Verified /scan RAP watchlist")) {
+      hotWatchlist.push(candidate);
+      continue;
+    }
+
     if (
       !respectCooldown ||
       !candidate.lastCheckedAt ||
@@ -2437,6 +2456,14 @@ function selectCandidatesFromPool(
       coolingDown.push(candidate);
     }
   }
+
+  const prioritizedWatchlist = shuffle(hotWatchlist).sort((left, right) => {
+    const priorityDelta =
+      getCandidatePriority(right, { minimumValue, minimumRap }) -
+      getCandidatePriority(left, { minimumValue, minimumRap });
+    if (priorityDelta !== 0) return priorityDelta;
+    return (left.lastCheckedAt || 0) - (right.lastCheckedAt || 0);
+  });
 
   const neverChecked = shuffle(
     fresh.filter((candidate) => !candidate.lastCheckedAt),
@@ -2456,7 +2483,11 @@ function selectCandidatesFromPool(
     return left.lastCheckedAt - right.lastCheckedAt;
   });
 
-  const preferred = [...neverChecked, ...previouslyChecked];
+  const preferred = [
+    ...prioritizedWatchlist,
+    ...neverChecked,
+    ...previouslyChecked,
+  ];
   const fallbackCooling = [...coolingDown].sort(
     (left, right) => left.lastCheckedAt - right.lastCheckedAt,
   );
