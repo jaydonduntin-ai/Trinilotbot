@@ -11,6 +11,8 @@ Node.js + `discord.js` bot for public Roblox lookups and Discord slash commands.
 - `/dc2rb discord_user:<name-or-id>` — verified public Discord-to-Roblox mapping when a compatible association provider is configured; otherwise `Unavailable`.
 - `/alerts action:<enable|disable|status>` — opt in/out of monitor mentions.
 - `/target min_rap:<optional> limit:<optional>` — automatically samples owners across many higher-value Rolimon's limiteds, deduplicates Roblox user IDs, checks public presence, verifies RAP from Roblox public collectible inventory with Rolimon's player totals as a fallback/cross-check, shuffles qualifying active users, and returns 5 by default (maximum 7). It does not expose exact server/job IDs.
+- `/rbx2mm2 min_rap:<optional> limit:<optional>` — uses the same rotating candidate database as `/target`, keeps only players whose public Roblox presence reports the Murder Mystery 2 universe, then applies the Roblox RAP threshold. MM2 inventory value is shown when a verified inventory provider returns it.
+- `/rbx2adm min_rap:<optional> limit:<optional>` — same pipeline for the official Adopt Me universe. Adopt Me game-inventory value is shown only when a compatible verified user-inventory provider is configured.
 
 ## Data rules
 
