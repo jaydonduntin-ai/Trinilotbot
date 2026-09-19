@@ -29,9 +29,11 @@ import { getRolimonsLeaderboardPlayers } from "../sources/rolimons-leaderboard.j
 import { searchRolimonsPlayers } from "../sources/rolimons-player-search.js";
 import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
+import { getRblxValueProfile } from "../providers/rblxvalue.js";
 
 export const DEFAULT_TARGET_RAP = 450_000;
 export const DEFAULT_TARGET_VALUE = 150_000;
+export const DEFAULT_MM2_VALUE = 150_000;
 export const DEFAULT_TARGET_COUNT = 5;
 export const MAX_TARGETS = 7;
 
@@ -89,6 +91,10 @@ const MARKETPLACE_GROUP_SEEDS = 6;
 const MARKETPLACE_OWNER_LIMIT = 20;
 const PRESENCE_BATCH_SIZE = 50;
 const VERIFY_CONCURRENCY = 5;
+const MM2_PROFILE_CHECK_LIMIT = 24;
+const MM2_PROFILE_CONCURRENCY = 2;
+const MM2_SCAN_WAVE_SIZE = 300;
+const MM2_SCAN_TIME_BUDGET_MS = 45_000;
 
 const SEARCH_TERMS = [
   "pro","king","queen","dark","shadow","cool","game","player","star","wolf",
@@ -325,6 +331,254 @@ export async function scanDiscoveredTargets({
       ]),
     ],
   };
+}
+
+export async function scanMm2ValueTargets({
+  minimumGameValue = DEFAULT_MM2_VALUE,
+  minimumRap = null,
+  limit = DEFAULT_TARGET_COUNT,
+} = {}) {
+  const game = GAME_TARGETS.mm2;
+  const requestedLimit = Math.min(
+    MAX_TARGETS,
+    Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
+  );
+
+  const discovery = await discoverCandidateUserIds({
+    minimumValue: null,
+    minimumRap: null,
+    respectCooldown: false,
+    maxCandidatesOverride: getPositiveIntegerEnv(
+      "ROBLOX_GAME_TARGET_MAX_CANDIDATES",
+      DEFAULT_GAME_SCAN_CANDIDATES,
+    ),
+  });
+
+  const startedAt = Date.now();
+  const verifiedPlayers = [];
+  const activeSeen = new Map();
+  let presenceScannedCount = 0;
+  let profileChecks = 0;
+  let valueUnavailableCount = 0;
+  let belowGameValueCount = 0;
+
+  for (
+    let offset = 0;
+    offset < discovery.userIds.length;
+    offset += MM2_SCAN_WAVE_SIZE
+  ) {
+    if (Date.now() - startedAt >= MM2_SCAN_TIME_BUDGET_MS) break;
+    if (verifiedPlayers.length >= requestedLimit) break;
+    if (profileChecks >= MM2_PROFILE_CHECK_LIMIT) break;
+
+    const wave = discovery.userIds.slice(
+      offset,
+      offset + MM2_SCAN_WAVE_SIZE,
+    );
+    const presenceScan = await getPresenceBatched(wave);
+    presenceScannedCount += presenceScan.checkedIds.length;
+
+    const gamePresences = presenceScan.presences.filter((presence) =>
+      isPresenceForGame(presence, game),
+    );
+
+    for (const presence of gamePresences) {
+      activeSeen.set(Number(presence.userId), presence);
+    }
+
+    const remainingProfileBudget =
+      MM2_PROFILE_CHECK_LIMIT - profileChecks;
+    const profileTargets = gamePresences.slice(
+      0,
+      remainingProfileBudget,
+    );
+    profileChecks += profileTargets.length;
+
+    const profileResults = await mapWithConcurrency(
+      profileTargets,
+      MM2_PROFILE_CONCURRENCY,
+      async (presence) => {
+        try {
+          const profile = await getRblxValueProfile({
+            userId: presence.userId,
+          });
+          return { presence, profile };
+        } catch (error) {
+          console.warn(
+            `RBLXValue MM2 profile lookup failed for ${presence.userId}:`,
+            error,
+          );
+          return { presence, profile: null };
+        }
+      },
+    );
+
+    for (const { presence, profile } of profileResults) {
+      if (Date.now() - startedAt >= MM2_SCAN_TIME_BUDGET_MS) break;
+      if (verifiedPlayers.length >= requestedLimit) break;
+
+      if (
+        profile?.status !== "verified" ||
+        typeof profile?.totalValue !== "number"
+      ) {
+        valueUnavailableCount += 1;
+        continue;
+      }
+
+      if (profile.totalValue < minimumGameValue) {
+        belowGameValueCount += 1;
+        continue;
+      }
+
+      const player = await buildMm2ValueTargetPlayer(
+        presence,
+        profile,
+        minimumRap,
+      ).catch((error) => {
+        console.warn(
+          `MM2 target build failed for ${presence.userId}:`,
+          error,
+        );
+        return null;
+      });
+
+      if (player) {
+        verifiedPlayers.push(player);
+      }
+    }
+  }
+
+  const stillInGamePlayers = await revalidatePlayersForGame(
+    verifiedPlayers,
+    game,
+  );
+
+  return {
+    gameKey: "mm2",
+    gameLabel: game.label,
+    universeId: game.universeId,
+    minimumGameValue,
+    minimumRap,
+    players: stillInGamePlayers.slice(0, requestedLimit),
+    candidateCount: discovery.userIds.length,
+    candidatePoolSize: discovery.candidatePoolSize,
+    candidateSourceCounts: discovery.candidateSourceCounts,
+    presenceScannedCount,
+    gameActiveCount: activeSeen.size,
+    profileChecks,
+    valueUnavailableCount,
+    belowGameValueCount,
+    verifiedCount: stillInGamePlayers.length,
+    scanElapsedMs: Date.now() - startedAt,
+    sources: [
+      ...new Set([
+        ...discovery.sources,
+        "Roblox public presence",
+        "RBLXValue API v2 profile",
+        "RBLXValue API v2 inventory",
+      ]),
+    ],
+  };
+}
+
+async function buildMm2ValueTargetPlayer(
+  presence,
+  profile,
+  minimumRap = null,
+) {
+  if (minimumRap !== null && minimumRap !== undefined) {
+    const rapChecked = await buildDiscoveredTargetPlayer(presence, {
+      minimumValue: null,
+      minimumRap,
+    });
+    if (!rapChecked?.qualifies) {
+      return null;
+    }
+
+    return {
+      ...rapChecked,
+      gameValue:
+        rapChecked.gameValue?.status === "verified"
+          ? rapChecked.gameValue
+          : profile,
+    };
+  }
+
+  const userId = Number(presence.userId);
+  const [userResult, avatarResult] = await Promise.allSettled([
+    getRobloxUserById(userId),
+    getAvatarThumbnail(userId),
+  ]);
+
+  const user =
+    userResult.status === "fulfilled" ? userResult.value : null;
+  if (!user) return null;
+
+  let gameValue = profile;
+  try {
+    const inventoryValue = await scanGameValue({
+      gameName: "Murder Mystery 2",
+      userId,
+      username: user.name,
+    });
+    if (inventoryValue?.status === "verified") {
+      gameValue = inventoryValue;
+    }
+  } catch (error) {
+    console.warn(
+      `MM2 full inventory lookup failed for ${userId}; using profile value:`,
+      error,
+    );
+  }
+
+  return {
+    qualifies: true,
+    id: userId,
+    username: user.name ?? "Unavailable",
+    displayName: user.displayName ?? "Unavailable",
+    avatarUrl:
+      avatarResult.status === "fulfilled" ? avatarResult.value : null,
+    profileUrl: `https://www.roblox.com/users/${userId}/profile`,
+    rolimonsUrl: getRolimonsProfileUrl(userId),
+    presenceStatus: "In game",
+    gameName: presence.lastLocation ?? "Murder Mystery 2",
+    rapValue: null,
+    rapSource: "Not required",
+    rapIsPartial: false,
+    totalValue: null,
+    valueSource: "MM2 inventory value",
+    premiumStatus: "Unavailable",
+    gameValue,
+    topLimiteds: [],
+  };
+}
+
+async function revalidatePlayersForGame(players, game) {
+  if (!Array.isArray(players) || players.length === 0) {
+    return [];
+  }
+
+  const userIds = players
+    .map((player) => Number(player?.id))
+    .filter((userId) => Number.isInteger(userId) && userId > 0);
+
+  const liveCheck = await getPresenceBatched(userIds);
+  const activeByUserId = new Map(
+    liveCheck.presences
+      .filter((presence) => isPresenceForGame(presence, game))
+      .map((presence) => [Number(presence.userId), presence]),
+  );
+
+  return players
+    .filter((player) => activeByUserId.has(Number(player.id)))
+    .map((player) => {
+      const presence = activeByUserId.get(Number(player.id));
+      return {
+        ...player,
+        presenceStatus: "In game",
+        gameName: presence?.lastLocation || player.gameName,
+      };
+    });
 }
 
 export async function scanGameTargets({
