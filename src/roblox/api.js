@@ -78,6 +78,47 @@ export async function lookupRobloxUser(username) {
   return users[0] ?? null;
 }
 
+export async function searchRobloxUsers(
+  keyword,
+  { limit = 10, cursor = null } = {},
+) {
+  const normalizedKeyword = String(keyword ?? "").trim();
+  if (!normalizedKeyword) return { users: [], nextPageCursor: null };
+
+  const requestedLimit = [10, 25, 50, 100].includes(Number(limit))
+    ? Number(limit)
+    : 10;
+  const cursorQuery = cursor
+    ? `&cursor=${encodeURIComponent(cursor)}`
+    : "";
+
+  const payload = await fetchRobloxJson(
+    `${USERS_API_URL}/v1/users/search?keyword=${encodeURIComponent(
+      normalizedKeyword,
+    )}&limit=${requestedLimit}${cursorQuery}`,
+  );
+
+  return {
+    users: Array.isArray(payload?.data) ? payload.data : [],
+    nextPageCursor: payload?.nextPageCursor ?? null,
+  };
+}
+
+export async function getUserFriends(userId) {
+  const normalizedId = Number(userId);
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    return [];
+  }
+
+  const payload = await fetchRobloxJson(
+    `${FRIENDS_API_URL}/v1/users/${encodeURIComponent(
+      normalizedId,
+    )}/friends`,
+  );
+
+  return Array.isArray(payload?.data) ? payload.data : [];
+}
+
 export async function getRobloxUserById(userId) {
   const normalizedId = Number(userId);
   if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
