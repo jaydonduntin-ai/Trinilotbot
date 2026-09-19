@@ -146,7 +146,7 @@ export async function scanDiscoveredTargets({
 
   const activePresences = shuffle(
     presenceScan.presences.filter(
-      (presence) => Number(presence.userPresenceType) > 0,
+      (presence) => Number(presence.userPresenceType) === 2,
     ),
   ).slice(
     0,
@@ -184,9 +184,13 @@ export async function scanDiscoveredTargets({
     if (verifiedPlayers.length >= requestedLimit) break;
   }
 
+  const stillInGamePlayers = await revalidateCurrentlyInGame(
+    verifiedPlayers,
+  );
+
   return {
     minimumRap,
-    players: shuffle(verifiedPlayers)
+    players: shuffle(stillInGamePlayers)
       .slice(0, requestedLimit)
       .map(({ qualifies, ...player }) => player),
     candidateCount: discovery.userIds.length,
@@ -195,7 +199,7 @@ export async function scanDiscoveredTargets({
     recentlyCheckedSkipped: discovery.recentlyCheckedSkipped,
     candidateSourceCounts: discovery.candidateSourceCounts,
     activeCount: activePresences.length,
-    verifiedCount: verifiedPlayers.length,
+    verifiedCount: stillInGamePlayers.length,
     sources: [
       ...new Set([
         ...discovery.sources,
@@ -306,6 +310,10 @@ export async function scanGameTargets({
 }
 
 function isPresenceForGame(presence, game) {
+  if (Number(presence?.userPresenceType) !== 2) {
+    return false;
+  }
+
   if (Number(presence?.universeId) === Number(game.universeId)) {
     return true;
   }
@@ -1121,6 +1129,34 @@ function getTopLimiteds(inventory) {
       name: item.name,
       rap: Number(item.recentAveragePrice) || 0,
     }));
+}
+
+async function revalidateCurrentlyInGame(players) {
+  if (!Array.isArray(players) || players.length === 0) {
+    return [];
+  }
+
+  const userIds = players
+    .map((player) => Number(player?.id))
+    .filter((userId) => Number.isInteger(userId) && userId > 0);
+
+  const liveCheck = await getPresenceBatched(userIds);
+  const inGameByUserId = new Map(
+    liveCheck.presences
+      .filter((presence) => Number(presence?.userPresenceType) === 2)
+      .map((presence) => [Number(presence.userId), presence]),
+  );
+
+  return players
+    .filter((player) => inGameByUserId.has(Number(player.id)))
+    .map((player) => {
+      const presence = inGameByUserId.get(Number(player.id));
+      return {
+        ...player,
+        presenceStatus: "In game",
+        gameName: presence?.lastLocation || player.gameName,
+      };
+    });
 }
 
 async function getPresenceBatched(userIds) {
