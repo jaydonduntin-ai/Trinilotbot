@@ -31,10 +31,11 @@ const GAME_TARGETS = {
 
 const DEFAULT_SEED_ITEM_COUNT = 12;
 const DEFAULT_OWNERS_PER_ITEM = 20;
-const DEFAULT_MAX_CANDIDATES = 350;
-const DEFAULT_MAX_ACTIVE_TO_VERIFY = 120;
-const DEFAULT_POOL_MAX_SIZE = 2_000;
-const DEFAULT_POOL_TTL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_MAX_CANDIDATES = 500;
+const DEFAULT_GAME_SCAN_CANDIDATES = 1_200;
+const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
+const DEFAULT_POOL_MAX_SIZE = 5_000;
+const DEFAULT_POOL_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
 
 const candidatePool = new Map();
@@ -161,6 +162,10 @@ export async function scanGameTargets({
   // players currently active in the requested experience.
   const discovery = await discoverCandidateUserIds(minimumRap, {
     respectCooldown: false,
+    maxCandidatesOverride: getPositiveIntegerEnv(
+      "ROBLOX_GAME_TARGET_MAX_CANDIDATES",
+      DEFAULT_GAME_SCAN_CANDIDATES,
+    ),
   });
 
   if (discovery.userIds.length === 0) {
@@ -247,7 +252,7 @@ function isPresenceForGame(presence, game) {
 
 async function discoverCandidateUserIds(
   minimumRap,
-  { respectCooldown = true } = {},
+  { respectCooldown = true, maxCandidatesOverride = null } = {},
 ) {
   const seedItemCount = getPositiveIntegerEnv(
     "ROBLOX_TARGET_SEED_ITEM_COUNT",
@@ -257,10 +262,14 @@ async function discoverCandidateUserIds(
     "ROBLOX_TARGET_OWNERS_PER_ITEM",
     DEFAULT_OWNERS_PER_ITEM,
   );
-  const maxCandidates = getPositiveIntegerEnv(
-    "ROBLOX_TARGET_MAX_CANDIDATES",
-    DEFAULT_MAX_CANDIDATES,
-  );
+  const maxCandidates =
+    Number.isInteger(Number(maxCandidatesOverride)) &&
+    Number(maxCandidatesOverride) > 0
+      ? Number(maxCandidatesOverride)
+      : getPositiveIntegerEnv(
+          "ROBLOX_TARGET_MAX_CANDIDATES",
+          DEFAULT_MAX_CANDIDATES,
+        );
   const configuredSeedFloor = getPositiveIntegerEnv(
     "ROBLOX_TARGET_SEED_MIN_ITEM_RAP",
     DEFAULT_SEED_MIN_ITEM_RAP,
