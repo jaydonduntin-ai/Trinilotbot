@@ -84,12 +84,12 @@ const PRESENCE_BATCH_SIZE = 50;
 const VERIFY_CONCURRENCY = 5;
 
 const SEARCH_TERMS = [
-  "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p",
-  "q","r","s","t","u","v","w","x","y","z",
   "pro","king","queen","dark","shadow","cool","game","player","star","wolf",
-  "dragon","ninja","blue","red","green","gold","fire","ice","the","xx",
-  "yt","tv","boy","girl","roblox","master","elite","legend","nova","sky",
-  "moon","sun","cat","dog","max","ace","zero","neo","rex","leo"
+  "dragon","ninja","blue","red","green","gold","fire","ice","the","boy",
+  "girl","roblox","master","elite","legend","nova","sky","moon","sun","cat",
+  "dog","max","ace","zero","neo","rex","leo","trade","trader","limited",
+  "collector","gaming","ytb","ttv","xxl","dev","builder","rich","rare",
+  "avatar","pixel","epic","super","mega","ultra","night","light","storm"
 ];
 
 const GROUP_SEARCH_TERMS = [
@@ -107,13 +107,14 @@ let lastLimitedOwnerRefreshAt = 0;
 let lastGroupRefreshAt = 0;
 let lastLeaderboardRefreshAt = 0;
 let lastMarketplaceRefreshAt = 0;
+let candidateRefreshPromise = null;
 
 export function startTargetCandidatePoolWarmup() {
   if (targetPoolWarmupTimer) return;
 
   const refresh = async () => {
     try {
-      const stats = await refreshGeneralCandidatePool();
+      const stats = await refreshCandidatePool();
       console.info(
         `Target pool refresh: +${stats.userSearch} Roblox-search, +${stats.socialGraph} friends, +${stats.followers} followers, +${stats.followings} followings, +${stats.tradeAds} trade-ad, +${stats.rolimonsSearch} Rolimon's-search, +${stats.leaderboard} leaderboard, +${stats.limitedOwners} Rolimon's-owner, +${stats.marketplaceCreators} marketplace-creators, +${stats.marketplaceOwners} marketplace-owners, +${stats.marketplaceGroupMembers} marketplace-group-members, +${stats.groupSearchMembers} group-search, +${stats.groupGraphMembers} group-graph, +${stats.friendGroupMembers} friend-group, +${stats.primaryGroupMembers} primary-group, +${stats.groupOwners} group-owner, +${stats.groupWallPosters} wall-poster, +${stats.allyGroupMembers} ally-group, +${stats.enemyGroupMembers} enemy-group users, ${candidatePool.size} pooled.`,
       );
@@ -351,7 +352,13 @@ async function discoverCandidateUserIds(
           DEFAULT_MAX_CANDIDATES,
         );
 
-  const candidateSourceCounts = await refreshGeneralCandidatePool();
+  if (candidatePool.size === 0) {
+    await withTimeout(refreshCandidatePool(), 8_000, null);
+  } else {
+    void refreshCandidatePool();
+  }
+
+  const candidateSourceCounts = getPoolSourceCounts();
   const now = Date.now();
   const selection = selectCandidatesFromPool(maxCandidates, now, {
     respectCooldown,
@@ -385,6 +392,23 @@ async function discoverCandidateUserIds(
       "Roblox public enemy-group members",
     ],
   };
+}
+
+async function refreshCandidatePool() {
+  if (candidateRefreshPromise) {
+    return candidateRefreshPromise;
+  }
+
+  candidateRefreshPromise = refreshGeneralCandidatePool()
+    .catch((error) => {
+      console.warn("Candidate pool refresh failed:", error);
+      return getPoolSourceCounts();
+    })
+    .finally(() => {
+      candidateRefreshPromise = null;
+    });
+
+  return candidateRefreshPromise;
 }
 
 async function refreshGeneralCandidatePool() {
@@ -1614,6 +1638,104 @@ async function getPresenceBatched(userIds) {
   return { presences, checkedIds };
 }
 
+function getPoolSourceCounts() {
+  const counts = {
+    userSearch: 0,
+    socialGraph: 0,
+    followers: 0,
+    followings: 0,
+    tradeAds: 0,
+    rolimonsSearch: 0,
+    leaderboard: 0,
+    limitedOwners: 0,
+    marketplaceCreators: 0,
+    marketplaceOwners: 0,
+    marketplaceGroupMembers: 0,
+    groupSearchMembers: 0,
+    groupGraphMembers: 0,
+    friendGroupMembers: 0,
+    primaryGroupMembers: 0,
+    groupOwners: 0,
+    groupWallPosters: 0,
+    allyGroupMembers: 0,
+    enemyGroupMembers: 0,
+  };
+
+  const sourceToKey = new Map([
+    ["Roblox public user search", "userSearch"],
+    ["Roblox public friends graph", "socialGraph"],
+    ["Roblox public followers", "followers"],
+    ["Roblox public followings", "followings"],
+    ["Rolimon's recent trade ads", "tradeAds"],
+    ["Rolimon's player search", "rolimonsSearch"],
+    ["Rolimon's value leaderboard", "leaderboard"],
+    [
+      "Rolimon's limited catalog + Roblox public asset owners",
+      "limitedOwners",
+    ],
+    ["Roblox Marketplace creators", "marketplaceCreators"],
+    ["Roblox Marketplace collectible owners", "marketplaceOwners"],
+    [
+      "Roblox Marketplace creator-group members",
+      "marketplaceGroupMembers",
+    ],
+    [
+      "Roblox public group search + group members",
+      "groupSearchMembers",
+    ],
+    [
+      "Roblox public user-group graph + group members",
+      "groupGraphMembers",
+    ],
+    [
+      "Roblox friends' public groups + group members",
+      "friendGroupMembers",
+    ],
+    ["Roblox public primary-group members", "primaryGroupMembers"],
+    ["Roblox public group owners", "groupOwners"],
+    ["Roblox public group wall posters", "groupWallPosters"],
+    ["Roblox public allied-group members", "allyGroupMembers"],
+    ["Roblox public enemy-group members", "enemyGroupMembers"],
+  ]);
+
+  for (const candidate of candidatePool.values()) {
+    for (const source of candidate.sources ?? []) {
+      const key = sourceToKey.get(source);
+      if (key) counts[key] += 1;
+    }
+  }
+
+  return counts;
+}
+
+function getCandidatePriority(candidate) {
+  const sources = candidate?.sources ?? new Set();
+  let score = 0;
+
+  const weights = new Map([
+    ["Rolimon's value leaderboard", 120],
+    [
+      "Rolimon's limited catalog + Roblox public asset owners",
+      110,
+    ],
+    ["Roblox Marketplace collectible owners", 100],
+    ["Rolimon's recent trade ads", 95],
+    ["Rolimon's player search", 80],
+    ["Roblox Marketplace creators", 55],
+    ["Roblox public group owners", 45],
+    ["Roblox public user search", 30],
+    ["Roblox public followers", 25],
+    ["Roblox public followings", 25],
+    ["Roblox public friends graph", 20],
+  ]);
+
+  for (const source of sources) {
+    score = Math.max(score, weights.get(source) ?? 10);
+  }
+
+  return score;
+}
+
 function addCandidatesToPool(userIds, source, now = Date.now()) {
   for (const rawUserId of userIds) {
     const userId = Number(rawUserId);
@@ -1692,10 +1814,19 @@ function selectCandidatesFromPool(
 
   const neverChecked = shuffle(
     fresh.filter((candidate) => !candidate.lastCheckedAt),
+  ).sort(
+    (left, right) =>
+      getCandidatePriority(right) - getCandidatePriority(left),
   );
-  const previouslyChecked = fresh
-    .filter((candidate) => candidate.lastCheckedAt)
-    .sort((left, right) => left.lastCheckedAt - right.lastCheckedAt);
+
+  const previouslyChecked = shuffle(
+    fresh.filter((candidate) => candidate.lastCheckedAt),
+  ).sort((left, right) => {
+    const priorityDelta =
+      getCandidatePriority(right) - getCandidatePriority(left);
+    if (priorityDelta !== 0) return priorityDelta;
+    return left.lastCheckedAt - right.lastCheckedAt;
+  });
 
   const selected = [...neverChecked, ...previouslyChecked]
     .slice(0, limit)
