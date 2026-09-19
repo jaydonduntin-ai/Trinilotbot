@@ -2,6 +2,7 @@ import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_COUNT,
   DEFAULT_TARGET_RAP,
+  DEFAULT_TARGET_VALUE,
   MAX_TARGETS,
   scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
@@ -10,7 +11,16 @@ export const targetsCommand = {
   definition: new SlashCommandBuilder()
     .setName("target")
     .setDescription(
-      "Discover Roblox players currently in-game above a RAP threshold.",
+      "Discover currently in-game Roblox players above a value/RAP threshold.",
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("min_value")
+        .setDescription(
+          `Minimum collectible value, default ${DEFAULT_TARGET_VALUE.toLocaleString()}.`,
+        )
+        .setMinValue(1)
+        .setMaxValue(2_000_000_000),
     )
     .addIntegerOption((option) =>
       option
@@ -32,14 +42,26 @@ export const targetsCommand = {
     ),
 
   async execute(interaction) {
-    const minimumRap = interaction.options.getInteger("min_rap") ?? undefined;
+    const minimumValueOption =
+      interaction.options.getInteger("min_value");
+    const minimumRapOption =
+      interaction.options.getInteger("min_rap");
     const limit =
       interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
+
+    // Backward compatibility: /target min_rap:... remains RAP-only.
+    // With no threshold options, /target defaults to 150k+ collectible value.
+    const minimumValue =
+      minimumRapOption !== null && minimumValueOption === null
+        ? null
+        : (minimumValueOption ?? undefined);
+    const minimumRap = minimumRapOption ?? null;
 
     await interaction.deferReply({ ephemeral: true });
 
     try {
       const result = await scanDiscoveredTargets({
+        minimumValue,
         minimumRap,
         limit,
       });
@@ -48,8 +70,8 @@ export const targetsCommand = {
       await interaction.editReply({
         content:
           result.players.length > 0
-            ? `Found ${result.players.length} random active public profile${result.players.length === 1 ? "" : "s"} at or above ${result.minimumRap.toLocaleString()} RAP.`
-            : `No active public profile at or above ${result.minimumRap.toLocaleString()} RAP was verified in this discovery pass.`,
+            ? `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}.`
+            : `No currently in-game public profile matching ${formatThresholds(result)} was verified in this discovery pass.`,
         embeds: embeds.slice(0, 10),
       });
     } catch (error) {
@@ -71,9 +93,11 @@ function buildTargetEmbeds(result) {
         `Candidates selected: ${result.candidateCount ?? 0}`,
         `Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `Currently in-game seen: ${result.activeCount ?? 0}`,
-        `RAP checks attempted: ${result.verificationAttempts ?? 0}`,
+        `Value/RAP checks attempted: ${result.verificationAttempts ?? 0}`,
+        `Value unavailable: ${result.valueUnavailableCount ?? 0}`,
+        `Below value: ${result.belowValueCount ?? 0}`,
         `RAP unavailable: ${result.rapUnavailableCount ?? 0}`,
-        `Below threshold: ${result.belowThresholdCount ?? 0}`,
+        `Below RAP: ${result.belowRapCount ?? 0}`,
         `Cooling candidates skipped: ${result.recentlyCheckedSkipped ?? 0}`,
         `Roblox search: ${result.candidateSourceCounts?.userSearch ?? 0}`,
         `Roblox friends: ${result.candidateSourceCounts?.socialGraph ?? 0}`,
@@ -96,7 +120,12 @@ function buildTargetEmbeds(result) {
         `Roblox enemy groups: ${result.candidateSourceCounts?.enemyGroupMembers ?? 0}`,
         `Verified live above threshold: ${result.verifiedCount ?? 0}`,
         `Scan time: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
-        `RAP threshold: ${result.minimumRap.toLocaleString()}`,
+        result.minimumValue !== null && result.minimumValue !== undefined
+          ? `Value threshold: ${result.minimumValue.toLocaleString()}`
+          : null,
+        result.minimumRap !== null && result.minimumRap !== undefined
+          ? `RAP threshold: ${result.minimumRap.toLocaleString()}`
+          : null,
       ]
         .filter(Boolean)
         .join("\n"),
@@ -146,6 +175,11 @@ function buildTargetEmbeds(result) {
           inline: true,
         },
         {
+          name: "Value source",
+          value: player.valueSource ?? "Unavailable",
+          inline: false,
+        },
+        {
           name: "RAP source",
           value: player.rapSource ?? "Unavailable",
           inline: false,
@@ -164,6 +198,17 @@ function buildTargetEmbeds(result) {
   });
 
   return [summary, ...players];
+}
+
+function formatThresholds(result) {
+  const parts = [];
+  if (result.minimumValue !== null && result.minimumValue !== undefined) {
+    parts.push(`${result.minimumValue.toLocaleString()}+ value`);
+  }
+  if (result.minimumRap !== null && result.minimumRap !== undefined) {
+    parts.push(`${result.minimumRap.toLocaleString()}+ RAP`);
+  }
+  return parts.length > 0 ? parts.join(" and ") : "the configured thresholds";
 }
 
 function truncate(value, max) {
