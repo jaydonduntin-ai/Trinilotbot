@@ -98,25 +98,7 @@ function buildTargetEmbeds(result) {
         `RAP unavailable: ${result.rapUnavailableCount ?? 0}`,
         `Below RAP: ${result.belowRapCount ?? 0}`,
         `Cooling candidates skipped: ${result.recentlyCheckedSkipped ?? 0}`,
-        `Roblox search: ${result.candidateSourceCounts?.userSearch ?? 0}`,
-        `Roblox friends: ${result.candidateSourceCounts?.socialGraph ?? 0}`,
-        `Roblox followers: ${result.candidateSourceCounts?.followers ?? 0}`,
-        `Roblox followings: ${result.candidateSourceCounts?.followings ?? 0}`,
-        `Rolimon's trade ads: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
-        `Rolimon's player search: ${result.candidateSourceCounts?.rolimonsSearch ?? 0}`,
-        `Rolimon's leaderboard: ${result.candidateSourceCounts?.leaderboard ?? 0}`,
-        `Rolimon's limited owners: ${result.candidateSourceCounts?.limitedOwners ?? 0}`,
-        `Roblox Marketplace creators: ${result.candidateSourceCounts?.marketplaceCreators ?? 0}`,
-        `Roblox Marketplace owners: ${result.candidateSourceCounts?.marketplaceOwners ?? 0}`,
-        `Roblox Marketplace creator groups: ${result.candidateSourceCounts?.marketplaceGroupMembers ?? 0}`,
-        `Roblox group search: ${result.candidateSourceCounts?.groupSearchMembers ?? 0}`,
-        `Roblox group graph: ${result.candidateSourceCounts?.groupGraphMembers ?? 0}`,
-        `Roblox friends' groups: ${result.candidateSourceCounts?.friendGroupMembers ?? 0}`,
-        `Roblox primary groups: ${result.candidateSourceCounts?.primaryGroupMembers ?? 0}`,
-        `Roblox group owners: ${result.candidateSourceCounts?.groupOwners ?? 0}`,
-        `Roblox group wall posters: ${result.candidateSourceCounts?.groupWallPosters ?? 0}`,
-        `Roblox allied groups: ${result.candidateSourceCounts?.allyGroupMembers ?? 0}`,
-        `Roblox enemy groups: ${result.candidateSourceCounts?.enemyGroupMembers ?? 0}`,
+        `Rolimon's trade-ad users: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
         `Verified live above threshold: ${result.verifiedCount ?? 0}`,
         `Scan time: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.minimumValue !== null && result.minimumValue !== undefined
@@ -130,14 +112,14 @@ function buildTargetEmbeds(result) {
         .join("\n"),
     )
     .addFields({
-      name: "Discovery routes",
+      name: "Discovery source",
       value:
-        "Providers: Roblox (official public APIs) · Rolimon's (public site/unofficial API routes)\n" +
+        "Candidates: Rolimon's recent trade ads\nVerification: Roblox current presence + public value data\n" +
         (truncate((result.sources ?? []).join("\n"), 850) || "Unavailable"),
       inline: false,
     })
     .setFooter({
-      text: "Results are rechecked for current InGame presence before display. No exact server/job IDs or private inventories are exposed.",
+      text: "Candidates come only from Rolimon's recent trade ads. Results are rechecked for current InGame presence before display.",
     })
     .setTimestamp();
 
