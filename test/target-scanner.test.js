@@ -57,3 +57,20 @@ test("presence batches retry transient HTTP failures", async () => {
   assert.equal(attempts, 2);
   assert.deepEqual(result.checkedIds, [404]);
 });
+
+test("presence batches use secondary presence source for unresolved IDs", async () => {
+  const result = await getPresenceBatched(
+    [505],
+    {
+      maxAttempts: 1,
+      presenceFetcher: async () => [],
+      fallbackFetcher: async (ids) => {
+        assert.deepEqual(ids, [505]);
+        return [{ userId: 505, userPresenceType: 2 }];
+      },
+    },
+  );
+
+  assert.deepEqual(result.checkedIds, [505]);
+  assert.equal(result.presences[0].userPresenceType, 2);
+});
