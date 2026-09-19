@@ -21,7 +21,7 @@ import {
   searchRobloxUsers,
 } from "../roblox/api.js";
 import { getInventorySummary } from "../roblox/inventory.js";
-import { getPublicJoinUrl } from "../roblox/game-session.js";
+import { getFollowUserJoinUrl, getPublicJoinUrl } from "../roblox/game-session.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
 import {
   enrichInventoryWithRolimons,
@@ -2519,10 +2519,7 @@ async function buildTargetJoinability(presence, userId) {
   const placeId = Number(presence?.placeId);
   const gameId = presence?.gameId ? String(presence.gameId) : null;
 
-  const followJoinUrl =
-    Number.isInteger(normalizedUserId) && normalizedUserId > 0
-      ? `https://www.roblox.com/games/start?userId=${encodeURIComponent(normalizedUserId)}`
-      : null;
+  const followJoinUrl = getFollowUserJoinUrl(normalizedUserId);
 
   let exactJoinUrl = null;
   if (Number.isInteger(placeId) && placeId > 0 && gameId) {
@@ -2674,8 +2671,7 @@ async function revalidateCurrentlyInGame(players) {
         placeId: presence?.placeId ?? player.placeId ?? null,
         gameId: presence?.gameId ?? player.gameId ?? null,
         followJoinUrl:
-          player.followJoinUrl ??
-          `https://www.roblox.com/games/start?userId=${encodeURIComponent(player.id)}`,
+          player.followJoinUrl ?? getFollowUserJoinUrl(player.id),
         presenceVerifiedAt: Date.now(),
       };
     })
