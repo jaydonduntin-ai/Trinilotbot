@@ -20,8 +20,29 @@ const PRESENCE_LABELS = {
   3: "In Roblox Studio",
 };
 
-export async function getRobloxProfile(username) {
-  const lookup = await lookupRobloxUser(username);
+export async function getRobloxProfile(identifier) {
+  const normalized = String(identifier ?? "").trim();
+  const profileIdMatch = normalized.match(/roblox\.com\/users\/(\d+)/i);
+  const numericId = /^\d+$/.test(normalized)
+    ? Number(normalized)
+    : profileIdMatch
+      ? Number(profileIdMatch[1])
+      : null;
+
+  let lookup = null;
+  if (Number.isInteger(numericId) && numericId > 0) {
+    const user = await getRobloxUserById(numericId).catch(() => null);
+    if (user) {
+      lookup = {
+        id: numericId,
+        name: user.name,
+        displayName: user.displayName,
+      };
+    }
+  } else {
+    lookup = await lookupRobloxUser(normalized);
+  }
+
   if (!lookup) return null;
 
   const [detailsResult, presenceResult, avatarResult, inventoryResult, rolimonsResult, socialsResult, badgesResult] =
