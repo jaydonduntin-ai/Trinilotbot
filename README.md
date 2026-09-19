@@ -10,13 +10,13 @@ Node.js + `discord.js` bot for public Roblox lookups and Discord slash commands.
 - `/rbx2dc username:<name>` — verified public Roblox-to-Discord mapping when a compatible association provider is configured; otherwise `Unavailable`.
 - `/dc2rb discord_user:<name-or-id>` — verified public Discord-to-Roblox mapping when a compatible association provider is configured; otherwise `Unavailable`.
 - `/alerts action:<enable|disable|status>` — opt in/out of monitor mentions.
-- `/target min_rap:<optional> limit:<optional>` — automatically samples owners across many higher-value Rolimon's limiteds, deduplicates Roblox user IDs, checks public presence, verifies RAP from Roblox public collectible inventory with Rolimon's player totals as a fallback/cross-check, shuffles qualifying active users, and returns 5 by default (maximum 7). It does not expose exact server/job IDs.
+- `/target min_rap:<optional> limit:<optional>` — discovers general Roblox users through Roblox public user search and public friend graphs, checks public presence, verifies Roblox RAP, and returns random active qualifying profiles. Limited-item owner lists and Rolimon's trade ads are not used for target discovery.
 - `/rbx2mm2 min_rap:<optional> limit:<optional>` — uses the same rotating candidate database as `/target`, keeps only players whose public Roblox presence reports the Murder Mystery 2 universe, then applies the Roblox RAP threshold. MM2 inventory value is shown when a verified inventory provider returns it.
 - `/rbx2adm min_rap:<optional> limit:<optional>` — same pipeline for the official Adopt Me universe. Adopt Me game-inventory value is shown only when a compatible verified user-inventory provider is configured.
 
 ## Data rules
 
-Public Roblox APIs are used for profile/presence/social/inventory/owner information. Rolimon's is used for public market/item data and player-value links, with caching and fallback endpoints. `/target` discovers candidates from many limited-item owner lists rather than one hard-coded item. An optional Roblox session cookie can be used for owner lookup when explicitly enabled, with public lookup as fallback; it is never used to bypass private inventories or expose exact server/job IDs. Unsupported fields are shown as unavailable.
+Public Roblox APIs are used for profile/presence/social/inventory/owner information. Rolimon's is used for public market/item data and player-value links, with caching and fallback endpoints. `/target`, `/rbx2mm2`, and `/rbx2adm` use general Roblox discovery from public user search and public friend graphs. Rolimon's may still be used only as a RAP/value cross-check after a candidate is found. Unsupported fields are shown as unavailable.
 
 RBLXValue v2 is supported for MM2 when `ROBLOX_RBLXVALUE_API_KEY` is present. Value-list websites stay separate from proof of a user's inventory. Optional inventory adapters must return verified structured JSON before the bot displays their user-specific values.
 
