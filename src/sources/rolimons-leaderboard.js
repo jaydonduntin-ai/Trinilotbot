@@ -47,29 +47,22 @@ function parseLeaderboardPlayers(html) {
   const players = [];
   const seen = new Set();
 
-  const linkPattern = /href=["']\/player\/(\d+)["'][^>]*>([^<]+)</gi;
+  // The leaderboard cards contain nested markup, so relying on the username
+  // being the first text node after <a> is fragile. The player ID in the
+  // canonical /player/{id} link is the stable part we actually need.
+  const linkPattern = /href=["']\/player\/(\d+)(?:["'/?#])/gi;
   let match;
 
   while ((match = linkPattern.exec(html)) !== null) {
     const userId = Number(match[1]);
-    const username = decodeHtml(match[2]).trim();
 
     if (!Number.isInteger(userId) || userId <= 0 || seen.has(userId)) {
       continue;
     }
 
     seen.add(userId);
-    players.push({ userId, username });
+    players.push({ userId, username: null });
   }
 
   return players;
-}
-
-function decodeHtml(value) {
-  return String(value)
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
 }
