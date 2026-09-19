@@ -2,9 +2,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const storagePath = fileURLToPath(
-  new URL("../../data/scan-watchlist.json", import.meta.url),
-);
+const storagePath =
+  process.env.ROBLOX_SCAN_WATCHLIST_PATH?.trim() ||
+  fileURLToPath(
+    new URL("../../data/scan-watchlist.json", import.meta.url),
+  );
 
 let entries = new Map();
 let initialized = false;
@@ -28,6 +30,8 @@ export async function initializeScanWatchlist() {
         sources: Array.isArray(item.sources) ? item.sources : [],
         channels: Array.isArray(item.channels) ? item.channels : [],
         addedAt: item.addedAt ?? new Date().toISOString(),
+        rapVerifiedAt:
+          item.rapVerifiedAt ?? item.addedAt ?? new Date().toISOString(),
         lastPresenceType:
           Number.isInteger(Number(item.lastPresenceType))
             ? Number(item.lastPresenceType)
@@ -76,6 +80,10 @@ export async function addScanPlayers(players, channelId) {
       ],
       channels: [...channels],
       addedAt: current?.addedAt ?? new Date().toISOString(),
+      rapVerifiedAt:
+        typeof player.rapValue === "number"
+          ? new Date().toISOString()
+          : current?.rapVerifiedAt ?? current?.addedAt ?? new Date().toISOString(),
       lastPresenceType: current?.lastPresenceType ?? null,
       lastAlertedAt: current?.lastAlertedAt ?? null,
     });
