@@ -60,6 +60,7 @@ export const scanCommand = {
           [
             `Threshold: ${minimumRap.toLocaleString()}+ RAP`,
             `Candidates checked: ${result.checkedCount}`,
+            `Already-known users skipped: ${result.alreadyWatchedSkipped ?? 0}`,
             `Qualifying found: ${result.players.length}`,
             `Newly added: ${stored.added}`,
             `Already watched: ${stored.existing}`,
