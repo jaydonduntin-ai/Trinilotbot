@@ -35,6 +35,13 @@ import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
 import { getRblxValueProfile } from "../providers/rblxvalue.js";
 import { getScanWatchlist } from "../storage/scan-watchlist.js";
+import {
+  addScanAttemptIds,
+  addScanReservedIds,
+  addSurfacedTargetIds,
+  getTargetHistory,
+  initializeTargetHistory,
+} from "../storage/target-history.js";
 
 export const DEFAULT_TARGET_RAP = 450_000;
 export const DEFAULT_TARGET_VALUE = 150_000;
@@ -136,6 +143,8 @@ const liveTargetCache = new Map();
 const surfacedTargetIds = new Set();
 const scanReservedIds = new Set();
 const scanAttemptedByThreshold = new Map();
+let targetHistoryHydrated = false;
+let targetHistoryHydratePromise = null;
 let targetPoolWarmupTimer = null;
 let targetLiveCacheTimer = null;
 let liveTargetCursor = 0;
@@ -150,6 +159,32 @@ let lastMarketplaceRefreshAt = 0;
 let lastJailbreakTradeRefreshAt = 0;
 let limitedSeedCursor = 0;
 let candidateRefreshPromise = null;
+
+async function ensureTargetHistoryHydrated() {
+  if (targetHistoryHydrated) return;
+
+  if (!targetHistoryHydratePromise) {
+    targetHistoryHydratePromise = (async () => {
+      await initializeTargetHistory();
+      const history = await getTargetHistory();
+
+      for (const id of history.surfacedTargets) surfacedTargetIds.add(id);
+      for (const id of history.scanReserved) scanReservedIds.add(id);
+      for (const [key, ids] of history.scanAttempts) {
+        scanAttemptedByThreshold.set(key, new Set(ids));
+      }
+
+      targetHistoryHydrated = true;
+      console.info(
+        `Target history restored: ${surfacedTargetIds.size} surfaced targets, ${scanReservedIds.size} scan reservations.`,
+      );
+    })().finally(() => {
+      targetHistoryHydratePromise = null;
+    });
+  }
+
+  await targetHistoryHydratePromise;
+}
 
 export function startTargetCandidatePoolWarmup() {
   if (targetPoolWarmupTimer || targetLiveCacheTimer) return;
@@ -176,8 +211,10 @@ export function startTargetCandidatePoolWarmup() {
     }
   };
 
-  // Prime the verified index first, then immediately build the live cache.
-  void refreshCandidates().then(refreshLive);
+  // Restore durable dedupe history before warming the verified index.
+  void ensureTargetHistoryHydrated()
+    .then(refreshCandidates)
+    .then(refreshLive);
 
   targetPoolWarmupTimer = setInterval(
     refreshCandidates,
@@ -414,12 +451,18 @@ export function getTargetLiveCacheStats() {
   };
 }
 
-function rememberSurfacedTargets(players) {
+async function rememberSurfacedTargets(players) {
+  const ids = [];
   for (const player of players ?? []) {
     const userId = Number(player?.id ?? player?.userId);
     if (Number.isInteger(userId) && userId > 0) {
       surfacedTargetIds.add(userId);
+      ids.push(userId);
     }
+  }
+
+  if (ids.length > 0) {
+    await addSurfacedTargetIds(ids);
   }
 }
 
@@ -450,6 +493,8 @@ export async function scanDiscoveredTargets({
   minimumRap = getMinimumTargetRap(),
   limit = DEFAULT_TARGET_COUNT,
 } = {}) {
+  await ensureTargetHistoryHydrated();
+
   const requestedLimit = Math.min(
     MAX_TARGETS,
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
@@ -481,7 +526,7 @@ export async function scanDiscoveredTargets({
       const selectedPlayers = shuffle(finalCached.players)
         .slice(0, requestedLimit)
         .map(({ qualifies, ...player }) => player);
-      rememberSurfacedTargets(selectedPlayers);
+      await rememberSurfacedTargets(selectedPlayers);
 
       return {
         minimumValue,
@@ -682,7 +727,7 @@ export async function scanDiscoveredTargets({
   const selectedPlayers = shuffle(stillInGamePlayers.players)
     .slice(0, requestedLimit)
     .map(({ qualifies, ...player }) => player);
-  rememberSurfacedTargets(selectedPlayers);
+  await rememberSurfacedTargets(selectedPlayers);
 
   return {
     minimumValue,
@@ -729,6 +774,8 @@ export async function scanCandidatesForWatchlist({
   minimumValue = null,
   limit = 25,
 } = {}) {
+  await ensureTargetHistoryHydrated();
+
   const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 25));
   // /scan is for expanding the verified pool. Exclude persisted watchlist
   // members, users already surfaced by /target in this runtime, users already
@@ -778,6 +825,7 @@ export async function scanCandidatesForWatchlist({
     ),
   );
   const verified = [];
+  const newAttemptIds = [];
   let checkedCount = 0;
 
   const candidates = discovery.userIds
@@ -798,7 +846,10 @@ export async function scanCandidatesForWatchlist({
 
     const batch = candidates.slice(index, index + VERIFY_CONCURRENCY);
     checkedCount += batch.length;
-    for (const userId of batch) attemptedIds.add(Number(userId));
+    for (const userId of batch) {
+      attemptedIds.add(Number(userId));
+      newAttemptIds.push(Number(userId));
+    }
 
     const results = await Promise.all(
       batch.map((userId) =>
@@ -828,15 +879,28 @@ export async function scanCandidatesForWatchlist({
     }
   }
 
+  if (newAttemptIds.length > 0) {
+    await addScanAttemptIds(
+      getScanAttemptKey(minimumRap, minimumValue),
+      newAttemptIds,
+    );
+  }
+
   const selectedPlayers = verified
     .slice(0, requestedLimit)
     .map(({ qualifies, ...player }) => player);
 
+  const reservedIds = [];
   for (const player of selectedPlayers) {
     const userId = Number(player?.id ?? player?.userId);
     if (Number.isInteger(userId) && userId > 0) {
       scanReservedIds.add(userId);
+      reservedIds.push(userId);
     }
+  }
+
+  if (reservedIds.length > 0) {
+    await addScanReservedIds(reservedIds);
   }
 
   return {
