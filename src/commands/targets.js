@@ -4,6 +4,7 @@ import {
   DEFAULT_TARGET_RAP,
   DEFAULT_TARGET_VALUE,
   MAX_TARGETS,
+  MAX_TARGET_THRESHOLD,
   scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
 
@@ -17,19 +18,19 @@ export const targetsCommand = {
       option
         .setName("min_value")
         .setDescription(
-          "Optional minimum collectible value.",
+          `Optional minimum collectible value; max ${MAX_TARGET_THRESHOLD.toLocaleString()}.`,
         )
         .setMinValue(1)
-        .setMaxValue(2_000_000_000),
+        .setMaxValue(MAX_TARGET_THRESHOLD),
     )
     .addIntegerOption((option) =>
       option
         .setName("min_rap")
         .setDescription(
-          `Minimum RAP; defaults to ${DEFAULT_TARGET_RAP.toLocaleString()} when no value floor is supplied.`,
+          `Minimum RAP; default ${DEFAULT_TARGET_RAP.toLocaleString()}, max ${MAX_TARGET_THRESHOLD.toLocaleString()}.`,
         )
         .setMinValue(1)
-        .setMaxValue(2_000_000_000),
+        .setMaxValue(MAX_TARGET_THRESHOLD),
     )
     .addIntegerOption((option) =>
       option
