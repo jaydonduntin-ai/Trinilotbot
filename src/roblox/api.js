@@ -1,6 +1,7 @@
 const ROBLOX_API_TIMEOUT_MS = 10_000;
 const USERS_API_URL = "https://users.roblox.com";
 const PRESENCE_API_URL = "https://presence.roblox.com";
+const PRESENCE_PROXY_API_URL = "https://presence.roproxy.com";
 const GAMES_API_URL = "https://games.roblox.com";
 const THUMBNAILS_API_URL = "https://thumbnails.roblox.com";
 const INVENTORY_API_URL = "https://inventory.roblox.com";
@@ -518,6 +519,31 @@ export async function getUsersPresence(userIds) {
 export async function getUserPresence(userId) {
   const presences = await getUsersPresence([userId]);
   return presences[0] ?? null;
+}
+
+export async function getUsersPresenceFallback(userIds) {
+  const normalizedIds = userIds
+    .map((userId) => Number(userId))
+    .filter((userId) => Number.isInteger(userId) && userId > 0);
+
+  if (normalizedIds.length === 0) {
+    return [];
+  }
+
+  const payload = await fetchRobloxJson(
+    `${PRESENCE_PROXY_API_URL}/v1/presence/users`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      },
+      body: JSON.stringify({ userIds: normalizedIds }),
+    },
+  );
+
+  return payload?.userPresences ?? [];
 }
 
 export async function getGameDetails(universeId) {
