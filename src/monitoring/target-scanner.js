@@ -2253,6 +2253,7 @@ async function revalidateCurrentlyInGame(players) {
     batchSize: FINAL_RECHECK_BATCH_SIZE,
     maxAttempts: 3,
     interBatchDelayMs: 60,
+    individualFallback: true,
   });
 
   await sleep(250);
@@ -2261,6 +2262,7 @@ async function revalidateCurrentlyInGame(players) {
     batchSize: FINAL_RECHECK_BATCH_SIZE,
     maxAttempts: 3,
     interBatchDelayMs: 60,
+    individualFallback: true,
   });
 
   const firstByUserId = new Map(
@@ -2337,25 +2339,43 @@ export async function getPresenceBatched(
     0,
     Number(options.interBatchDelayMs) || 0,
   );
+  const individualFallback = options.individualFallback === true;
 
   const presences = [];
   const checkedIds = [];
 
   for (let index = 0; index < userIds.length; index += batchSize) {
-    const batch = userIds.slice(index, index + batchSize);
-    let success = false;
+    const batch = userIds
+      .slice(index, index + batchSize)
+      .map(Number)
+      .filter((userId) => Number.isInteger(userId) && userId > 0);
 
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const pending = new Set(batch);
+    const resolved = new Map();
+
+    for (
+      let attempt = 0;
+      attempt < maxAttempts && pending.size > 0;
+      attempt += 1
+    ) {
+      const requestedIds = [...pending];
+
       try {
-        const result = await presenceFetcher(batch);
-        presences.push(...result);
-        checkedIds.push(
-          ...result
-            .map((presence) => Number(presence?.userId))
-            .filter((userId) => Number.isInteger(userId) && userId > 0),
-        );
-        success = true;
-        break;
+        const result = await presenceFetcher(requestedIds);
+        const returned = Array.isArray(result) ? result : [];
+
+        for (const presence of returned) {
+          const userId = Number(presence?.userId);
+          if (!pending.has(userId)) continue;
+          resolved.set(userId, presence);
+          pending.delete(userId);
+        }
+
+        // Roblox can occasionally answer 200 with an empty/partial presence
+        // list. Treat missing requested IDs as transient and retry them.
+        if (pending.size > 0 && attempt < maxAttempts - 1) {
+          await sleep(250 * 2 ** attempt);
+        }
       } catch (error) {
         const status = Number(error?.status);
         const retryable =
@@ -2376,13 +2396,46 @@ export async function getPresenceBatched(
       }
     }
 
-    // Avoid bursting dozens of presence requests back-to-back.
-    if (success && index + batchSize < userIds.length) {
+    if (individualFallback && pending.size > 0) {
+      for (const userId of [...pending]) {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            const result = await presenceFetcher([userId]);
+            const presence = (Array.isArray(result) ? result : []).find(
+              (entry) => Number(entry?.userId) === userId,
+            );
+
+            if (presence) {
+              resolved.set(userId, presence);
+              pending.delete(userId);
+              break;
+            }
+          } catch (error) {
+            const status = Number(error?.status);
+            const retryable =
+              status === 429 ||
+              status === 408 ||
+              status >= 500;
+            if (!retryable || attempt >= 1) break;
+          }
+
+          await sleep(200 * (attempt + 1));
+        }
+      }
+    }
+
+    presences.push(...resolved.values());
+    checkedIds.push(...resolved.keys());
+
+    if (index + batchSize < userIds.length) {
       await sleep(interBatchDelayMs || 120);
     }
   }
 
-  return { presences, checkedIds };
+  return {
+    presences,
+    checkedIds: [...new Set(checkedIds)],
+  };
 }
 
 function sleep(ms) {
