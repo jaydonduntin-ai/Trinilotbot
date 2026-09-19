@@ -7,6 +7,7 @@ const INVENTORY_API_URL = "https://inventory.roblox.com";
 const FRIENDS_API_URL = "https://friends.roblox.com";
 const ACCOUNT_INFORMATION_API_URL = "https://accountinformation.roblox.com";
 const GROUPS_API_URL = "https://groups.roblox.com";
+const CATALOG_API_URL = "https://catalog.roblox.com";
 
 export class RobloxApiError extends Error {
   constructor(message, status) {
@@ -101,6 +102,44 @@ export async function searchRobloxUsers(
 
   return {
     users: Array.isArray(payload?.data) ? payload.data : [],
+    nextPageCursor: payload?.nextPageCursor ?? null,
+  };
+}
+
+export async function searchMarketplaceItems({
+  keyword = null,
+  category = 2,
+  subcategory = 2,
+  sortType = 2,
+  sortAggregation = 5,
+  limit = 30,
+  cursor = null,
+} = {}) {
+  const requestedLimit = [10, 28, 30].includes(Number(limit))
+    ? Number(limit)
+    : 30;
+
+  const params = new URLSearchParams({
+    Category: String(category),
+    Subcategory: String(subcategory),
+    SortType: String(sortType),
+    SortAggregation: String(sortAggregation),
+    Limit: String(requestedLimit),
+  });
+
+  if (keyword) {
+    params.set("Keyword", String(keyword));
+  }
+  if (cursor) {
+    params.set("Cursor", String(cursor));
+  }
+
+  const payload = await fetchRobloxJson(
+    `${CATALOG_API_URL}/v1/search/items/details?${params.toString()}`,
+  );
+
+  return {
+    items: Array.isArray(payload?.data) ? payload.data : [],
     nextPageCursor: payload?.nextPageCursor ?? null,
   };
 }
