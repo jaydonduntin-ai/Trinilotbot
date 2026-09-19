@@ -34,8 +34,8 @@ import { getRblxValueProfile } from "../providers/rblxvalue.js";
 export const DEFAULT_TARGET_RAP = 450_000;
 export const DEFAULT_TARGET_VALUE = 150_000;
 export const DEFAULT_MM2_VALUE = 150_000;
-export const DEFAULT_TARGET_COUNT = 5;
-export const MAX_TARGETS = 7;
+export const DEFAULT_TARGET_COUNT = 10;
+export const MAX_TARGETS = 10;
 
 const GAME_TARGETS = {
   mm2: {
@@ -343,6 +343,92 @@ export async function scanDiscoveredTargets({
         "Rolimon's public player info (RAP/value cross-check only)",
       ]),
     ],
+  };
+}
+
+export async function scanCandidatesForWatchlist({
+  minimumRap = DEFAULT_TARGET_RAP,
+  minimumValue = null,
+  limit = 25,
+} = {}) {
+  const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 25));
+  const discovery = await discoverCandidateUserIds({
+    minimumValue,
+    minimumRap,
+    respectCooldown: false,
+    maxCandidatesOverride: getPositiveIntegerEnv(
+      "ROBLOX_TARGET_MAX_PRESENCE_CANDIDATES",
+      DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES,
+    ),
+  });
+
+  const startedAt = Date.now();
+  const timeBudgetMs = Math.max(
+    10_000,
+    getPositiveIntegerEnv(
+      "ROBLOX_TARGET_SCAN_TIME_BUDGET_MS",
+      DEFAULT_TARGET_SCAN_TIME_BUDGET_MS,
+    ),
+  );
+  const verified = [];
+  let checkedCount = 0;
+
+  const candidates = [...discovery.userIds].sort((leftId, rightId) =>
+    getCandidatePriority(
+      candidatePool.get(Number(rightId)),
+      { minimumValue, minimumRap },
+    ) -
+    getCandidatePriority(
+      candidatePool.get(Number(leftId)),
+      { minimumValue, minimumRap },
+    ),
+  );
+
+  for (let index = 0; index < candidates.length; index += VERIFY_CONCURRENCY) {
+    if (Date.now() - startedAt >= timeBudgetMs) break;
+    if (verified.length >= requestedLimit) break;
+
+    const batch = candidates.slice(index, index + VERIFY_CONCURRENCY);
+    checkedCount += batch.length;
+
+    const results = await Promise.all(
+      batch.map((userId) =>
+        buildDiscoveredTargetPlayer(
+          {
+            userId,
+            userPresenceType: 0,
+            lastLocation: null,
+            universeId: null,
+          },
+          { minimumValue, minimumRap },
+        ).catch((error) => {
+          console.warn(
+            `Scan watchlist verification failed for Roblox user ${userId}:`,
+            error,
+          );
+          return null;
+        }),
+      ),
+    );
+
+    for (const player of results) {
+      if (player?.qualifies) {
+        verified.push(player);
+        if (verified.length >= requestedLimit) break;
+      }
+    }
+  }
+
+  return {
+    players: verified
+      .slice(0, requestedLimit)
+      .map(({ qualifies, ...player }) => player),
+    minimumRap,
+    minimumValue,
+    checkedCount,
+    candidatePoolSize: discovery.candidatePoolSize,
+    candidateSourceCounts: discovery.candidateSourceCounts,
+    scanElapsedMs: Date.now() - startedAt,
   };
 }
 
