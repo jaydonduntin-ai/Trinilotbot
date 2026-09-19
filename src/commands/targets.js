@@ -1,6 +1,7 @@
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_COUNT,
+  DEFAULT_TARGET_RAP,
   DEFAULT_TARGET_VALUE,
   MAX_TARGETS,
   scanDiscoveredTargets,
@@ -48,13 +49,12 @@ export const targetsCommand = {
     const limit =
       interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
-    // Backward compatibility: /target min_rap:... remains RAP-only.
-    // With no threshold options, /target defaults to 150k+ collectible value.
-    const minimumValue =
-      minimumRapOption !== null && minimumValueOption === null
-        ? null
-        : (minimumValueOption ?? undefined);
-    const minimumRap = minimumRapOption ?? null;
+    // Default /target behavior is the established 450k+ RAP live search.
+    // min_value can still be supplied explicitly for value-based searches.
+    const minimumValue = minimumValueOption ?? null;
+    const minimumRap =
+      minimumRapOption ??
+      (minimumValueOption === null ? DEFAULT_TARGET_RAP : null);
 
     await interaction.deferReply({ ephemeral: true });
 
@@ -102,6 +102,7 @@ function buildTargetEmbeds(result) {
         `Passed threshold before live recheck: ${result.preRecheckVerifiedCount ?? 0}`,
         `Cooling candidates skipped: ${result.recentlyCheckedSkipped ?? 0}`,
         `Trade-ad users: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
+        `Jailbreak trade users: ${result.candidateSourceCounts?.jailbreakTrades ?? 0}`,
         `Limited owners: ${result.candidateSourceCounts?.limitedOwners ?? 0}`,
         `Leaderboard users: ${result.candidateSourceCounts?.leaderboard ?? 0}`,
         `Marketplace owners: ${result.candidateSourceCounts?.marketplaceOwners ?? 0}`,
