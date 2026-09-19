@@ -107,6 +107,11 @@ function buildProfileEmbeds(profile, page) {
       { name: "Followers", value: formatCount(profile.socialCounts?.followers), inline: true },
       { name: "Following", value: formatCount(profile.socialCounts?.following), inline: true },
       { name: "Current game", value: formatCurrentGame(profile.currentGame), inline: true },
+      {
+        name: "Current server",
+        value: formatCurrentServer(profile.currentGame),
+        inline: false,
+      },
       { name: "Last known game", value: profile.lastGame ?? "Unavailable", inline: true },
       { name: "Last online", value: formatLastOnline(profile.lastOnline), inline: true },
       { name: "Total RAP", value: formatTotalRAP(profile, rolimonsUrl), inline: true },
@@ -191,11 +196,29 @@ function buildProfileComponents(profile, interactionId, page, totalPages) {
     new ButtonBuilder().setLabel("Roblox profile").setStyle(ButtonStyle.Link).setURL(profile.profileUrl),
     new ButtonBuilder().setLabel("Rolimon's").setStyle(ButtonStyle.Link).setURL(getRolimonsProfileUrl(profile.id)),
   ];
+  if (profile.currentGame?.followJoinUrl) {
+    links.push(
+      new ButtonBuilder()
+        .setLabel("Join player")
+        .setStyle(ButtonStyle.Link)
+        .setURL(profile.currentGame.followJoinUrl),
+    );
+  }
   if (profile.currentGame?.gameUrl) {
-    links.push(new ButtonBuilder().setLabel("Open in Roblox").setStyle(ButtonStyle.Link).setURL(profile.currentGame.gameUrl));
+    links.push(
+      new ButtonBuilder()
+        .setLabel("Open current game")
+        .setStyle(ButtonStyle.Link)
+        .setURL(profile.currentGame.gameUrl),
+    );
   }
   if (profile.currentGame?.joinUrl) {
-    links.push(new ButtonBuilder().setLabel("Join exact server").setStyle(ButtonStyle.Link).setURL(profile.currentGame.joinUrl));
+    links.push(
+      new ButtonBuilder()
+        .setLabel("Try exact server")
+        .setStyle(ButtonStyle.Link)
+        .setURL(profile.currentGame.joinUrl),
+    );
   }
   return [new ActionRowBuilder().addComponents(links.slice(0, 5)), ...buildPaginationRow(interactionId, page, totalPages)];
 }
@@ -227,6 +250,22 @@ function formatTotalValue(profile, url) {
 function formatCurrentGame(game) {
   if (!game) return "Unavailable";
   return game.gameUrl ? `[${escapeMarkdown(game.name)}](${game.gameUrl})` : game.name;
+}
+
+function formatCurrentServer(game) {
+  if (!game) return "Unavailable";
+  const parts = [];
+  if (game.placeId) parts.push(`Place ID: \`${game.placeId}\``);
+  if (game.gameId) parts.push(`Job ID: \`${game.gameId}\``);
+  if (game.followJoinUrl) parts.push("[Join player](<" + game.followJoinUrl + ">)");
+  if (game.joinUrl) {
+    parts.push(
+      "[Try exact server](<" +
+        game.joinUrl +
+        ">) · Roblox currently has a known gameInstanceId deep-link issue",
+    );
+  }
+  return parts.length > 0 ? parts.join("\n") : "Unavailable";
 }
 
 function formatLastOnline(value) {
