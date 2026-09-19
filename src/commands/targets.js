@@ -10,7 +10,7 @@ export const targetsCommand = {
   definition: new SlashCommandBuilder()
     .setName("target")
     .setDescription(
-      "Discover random active Roblox players above a RAP threshold.",
+      "Discover Roblox players currently in-game above a RAP threshold.",
     )
     .addIntegerOption((option) =>
       option
@@ -93,7 +93,7 @@ function buildTargetEmbeds(result) {
       inline: false,
     })
     .setFooter({
-      text: "Randomized public-profile discovery. No exact server/job IDs or private inventories are exposed.",
+      text: "Results are rechecked for current InGame presence before display. No exact server/job IDs or private inventories are exposed.",
     })
     .setTimestamp();
 
