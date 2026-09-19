@@ -116,11 +116,13 @@ async function publishScanAlert(client, entry) {
       },
       {
         name: "Direct join",
-        value: profile?.currentGame?.joinUrl
-          ? `[Join exact server](${profile.currentGame.joinUrl})`
-          : profile?.currentGame?.gameUrl
-            ? `[Open game](${profile.currentGame.gameUrl})`
-            : "Unavailable",
+        value: profile?.currentGame?.followJoinUrl
+          ? `[Join player](${profile.currentGame.followJoinUrl})`
+          : profile?.currentGame?.joinUrl
+            ? `[Try exact server](${profile.currentGame.joinUrl})`
+            : profile?.currentGame?.gameUrl
+              ? `[Open game](${profile.currentGame.gameUrl})`
+              : "Unavailable",
         inline: false,
       },
     )
