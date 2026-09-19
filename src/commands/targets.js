@@ -68,8 +68,11 @@ function buildTargetEmbeds(result) {
     .setDescription(
       [
         `Candidate pool: ${result.candidatePoolSize ?? result.candidateCount ?? 0}`,
-        `Fresh candidates scanned: ${result.freshCandidateCount ?? result.candidateCount ?? 0}`,
-        `Cooling down from recent scans: ${result.recentlyCheckedSkipped ?? 0}`,
+        `Candidates selected: ${result.candidateCount ?? 0}`,
+        `Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
+        `Currently in-game seen: ${result.activeCount ?? 0}`,
+        `RAP checks attempted: ${result.verificationAttempts ?? 0}`,
+        `Cooling candidates skipped: ${result.recentlyCheckedSkipped ?? 0}`,
         `Roblox search: ${result.candidateSourceCounts?.userSearch ?? 0}`,
         `Roblox friends: ${result.candidateSourceCounts?.socialGraph ?? 0}`,
         `Roblox followers: ${result.candidateSourceCounts?.followers ?? 0}`,
@@ -89,15 +92,18 @@ function buildTargetEmbeds(result) {
         `Roblox group wall posters: ${result.candidateSourceCounts?.groupWallPosters ?? 0}`,
         `Roblox allied groups: ${result.candidateSourceCounts?.allyGroupMembers ?? 0}`,
         `Roblox enemy groups: ${result.candidateSourceCounts?.enemyGroupMembers ?? 0}`,
-        `Active candidates checked: ${result.activeCount ?? 0}`,
+        `Verified live above threshold: ${result.verifiedCount ?? 0}`,
+        `Scan time: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         `RAP threshold: ${result.minimumRap.toLocaleString()}`,
       ]
         .filter(Boolean)
         .join("\n"),
     )
     .addFields({
-      name: "Sources",
-      value: truncate((result.sources ?? []).join("\n"), 1000) || "Unavailable",
+      name: "Discovery routes",
+      value:
+        "Providers: Roblox (official public APIs) · Rolimon's (public site/unofficial API routes)\n" +
+        (truncate((result.sources ?? []).join("\n"), 850) || "Unavailable"),
       inline: false,
     })
     .setFooter({
