@@ -805,9 +805,12 @@ async function refreshCandidatePool() {
 }
 
 async function refreshGeneralCandidatePool() {
+  const now = Date.now();
+
+  // Keep trade ads as one signal, but no longer make discovery depend on them.
   const tradeAdsResult = await getRecentTradeAdPlayers().catch((error) => {
     console.warn("Rolimon's trade-ad discovery failed:", error);
-    return null;
+    return { players: [], itemIds: [] };
   });
 
   const tradeAdUserIds = [
@@ -817,35 +820,60 @@ async function refreshGeneralCandidatePool() {
         .filter((userId) => Number.isInteger(userId) && userId > 0),
     ),
   ];
+  addCandidatesToPool(tradeAdUserIds, "Rolimon's recent trade ads", now);
 
-  addCandidatesToPool(
-    tradeAdUserIds,
-    "Rolimon's recent trade ads",
-    Date.now(),
-  );
+  // Public Roblox limited ownership is the main non-trade-ad discovery route.
+  // Rolimon's is used only to choose high-value seed item IDs; ownership itself
+  // is verified against Roblox's public asset-owner endpoint.
+  let limitedOwnerUserIds = [];
+  if (now - lastLimitedOwnerRefreshAt >= LIMITED_OWNER_REFRESH_INTERVAL_MS) {
+    limitedOwnerUserIds = await refreshLimitedOwnerCandidates(
+      tradeAdsResult?.itemIds ?? [],
+    );
+    addCandidatesToPool(
+      limitedOwnerUserIds,
+      "Rolimon's limited catalog + Roblox public asset owners",
+      now,
+    );
+    lastLimitedOwnerRefreshAt = now;
+  }
+
+  // Value-leaderboard accounts give the pool another independent discovery
+  // path and provide useful value/RAP hints before expensive inventory checks.
+  let leaderboardUserIds = [];
+  if (
+    now - lastLeaderboardRefreshAt >=
+    ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS
+  ) {
+    leaderboardUserIds = await refreshRolimonsLeaderboardCandidates();
+    lastLeaderboardRefreshAt = now;
+  }
+
+  // Public Roblox Marketplace collectible owners add Roblox-native candidates
+  // that do not have to be advertising a trade.
+  let marketplaceStats = {
+    marketplaceCreators: 0,
+    marketplaceOwners: 0,
+    marketplaceGroupMembers: 0,
+  };
+  if (now - lastMarketplaceRefreshAt >= MARKETPLACE_REFRESH_INTERVAL_MS) {
+    marketplaceStats = await refreshMarketplaceCandidateSources().catch(
+      (error) => {
+        console.warn("Roblox Marketplace discovery failed:", error);
+        return marketplaceStats;
+      },
+    );
+    lastMarketplaceRefreshAt = now;
+  }
 
   pruneCandidatePool();
 
   return {
-    userSearch: 0,
-    socialGraph: 0,
-    followers: 0,
-    followings: 0,
+    ...getPoolSourceCounts(),
     tradeAds: tradeAdUserIds.length,
-    rolimonsSearch: 0,
-    leaderboard: 0,
-    limitedOwners: 0,
-    marketplaceCreators: 0,
-    marketplaceOwners: 0,
-    marketplaceGroupMembers: 0,
-    groupSearchMembers: 0,
-    groupGraphMembers: 0,
-    friendGroupMembers: 0,
-    primaryGroupMembers: 0,
-    groupOwners: 0,
-    groupWallPosters: 0,
-    allyGroupMembers: 0,
-    enemyGroupMembers: 0,
+    limitedOwners: limitedOwnerUserIds.length,
+    leaderboard: leaderboardUserIds.length,
+    ...marketplaceStats,
   };
 }
 
