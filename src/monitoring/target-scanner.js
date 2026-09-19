@@ -14,6 +14,7 @@ import {
   getUserPrimaryGroup,
   getUserRobloxGroups,
   getUsersPresence,
+  getUsersPresenceFallback,
   lookupRobloxUsers,
   searchMarketplaceItems,
   searchRobloxGroups,
@@ -2254,6 +2255,7 @@ async function revalidateCurrentlyInGame(players) {
     maxAttempts: 3,
     interBatchDelayMs: 60,
     individualFallback: true,
+    fallbackFetcher: getUsersPresenceFallback,
   });
 
   await sleep(250);
@@ -2263,6 +2265,7 @@ async function revalidateCurrentlyInGame(players) {
     maxAttempts: 3,
     interBatchDelayMs: 60,
     individualFallback: true,
+    fallbackFetcher: getUsersPresenceFallback,
   });
 
   const firstByUserId = new Map(
@@ -2340,6 +2343,10 @@ export async function getPresenceBatched(
     Number(options.interBatchDelayMs) || 0,
   );
   const individualFallback = options.individualFallback === true;
+  const fallbackFetcher =
+    typeof options.fallbackFetcher === "function"
+      ? options.fallbackFetcher
+      : null;
 
   const presences = [];
   const checkedIds = [];
@@ -2421,6 +2428,26 @@ export async function getPresenceBatched(
 
           await sleep(200 * (attempt + 1));
         }
+      }
+    }
+
+    // If the official Roblox presence route omitted an ID even after retries,
+    // use a separate public Roblox API proxy as a final fresh signal. We still
+    // require an explicit InGame presence before returning a target.
+    if (fallbackFetcher && pending.size > 0) {
+      try {
+        const fallbackResult = await fallbackFetcher([...pending]);
+        for (const presence of Array.isArray(fallbackResult) ? fallbackResult : []) {
+          const userId = Number(presence?.userId);
+          if (!pending.has(userId)) continue;
+          resolved.set(userId, {
+            ...presence,
+            presenceSource: "RoProxy public Roblox API proxy",
+          });
+          pending.delete(userId);
+        }
+      } catch (error) {
+        console.warn("Secondary public presence route failed:", error);
       }
     }
 
