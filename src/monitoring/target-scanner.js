@@ -149,8 +149,8 @@ export function startTargetCandidatePoolWarmup() {
 }
 
 export async function scanDiscoveredTargets({
-  minimumValue = getMinimumTargetValue(),
-  minimumRap = null,
+  minimumValue = null,
+  minimumRap = getMinimumTargetRap(),
   limit = DEFAULT_TARGET_COUNT,
 } = {}) {
   const requestedLimit = Math.min(
