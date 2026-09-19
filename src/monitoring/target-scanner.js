@@ -18,8 +18,13 @@ export const MAX_TARGETS = 7;
 
 const DEFAULT_SEED_ITEM_COUNT = 12;
 const DEFAULT_OWNERS_PER_ITEM = 20;
-const DEFAULT_MAX_CANDIDATES = 220;
-const DEFAULT_MAX_ACTIVE_TO_VERIFY = 80;
+const DEFAULT_MAX_CANDIDATES = 350;
+const DEFAULT_MAX_ACTIVE_TO_VERIFY = 120;
+const DEFAULT_POOL_MAX_SIZE = 2_000;
+const DEFAULT_POOL_TTL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
+
+const candidatePool = new Map();
 const DEFAULT_SEED_MIN_ITEM_RAP = 75_000;
 const PRESENCE_BATCH_SIZE = 50;
 const OWNER_CONCURRENCY = 4;
@@ -43,6 +48,9 @@ export async function scanDiscoveredTargets({
       seedItems: discovery.seedItems,
       candidateCount: 0,
       candidateSourceCounts: discovery.candidateSourceCounts,
+      candidatePoolSize: discovery.candidatePoolSize,
+      freshCandidateCount: discovery.freshCandidateCount,
+      recentlyCheckedSkipped: discovery.recentlyCheckedSkipped,
       activeCount: 0,
       verifiedCount: 0,
       sources: discovery.sources,
@@ -50,9 +58,13 @@ export async function scanDiscoveredTargets({
     };
   }
 
-  const presences = await getPresenceBatched(discovery.userIds);
+  const presenceScan = await getPresenceBatched(discovery.userIds);
+  markCandidatesChecked(presenceScan.checkedIds);
+
   const activePresences = shuffle(
-    presences.filter((presence) => Number(presence.userPresenceType) > 0),
+    presenceScan.presences.filter(
+      (presence) => Number(presence.userPresenceType) > 0,
+    ),
   ).slice(
     0,
     getPositiveIntegerEnv(
@@ -101,6 +113,9 @@ export async function scanDiscoveredTargets({
     seedItems: discovery.seedItems,
     candidateCount: discovery.userIds.length,
     candidateSourceCounts: discovery.candidateSourceCounts,
+    candidatePoolSize: discovery.candidatePoolSize,
+    freshCandidateCount: discovery.freshCandidateCount,
+    recentlyCheckedSkipped: discovery.recentlyCheckedSkipped,
     activeCount: activePresences.length,
     verifiedCount: verifiedPlayers.length,
     sources: [
@@ -226,17 +241,20 @@ async function discoverCandidateUserIds(minimumRap) {
     console.warn("Rolimon's item catalog discovery failed:", itemCatalogResult.reason);
   }
 
-  const userIds = roundRobinUnique(
-    [tradeAdCandidates, shuffle(ownerCandidates)],
-    maxCandidates,
-  );
+  const now = Date.now();
+  addCandidatesToPool(tradeAdCandidates, "Rolimon's recent trade ads", now);
+  addCandidatesToPool(ownerCandidates, "Roblox asset owners", now);
+  pruneCandidatePool(now);
+
+  const selection = selectCandidatesFromPool(maxCandidates, now);
+  const userIds = selection.userIds;
 
   console.info(
-    `Target discovery: ${candidateSourceCounts.tradeAds} trade-ad candidates, ${candidateSourceCounts.assetOwners} owner candidates, ${userIds.length} unique total.`,
+    `Target discovery: ${candidateSourceCounts.tradeAds} trade-ad candidates, ${candidateSourceCounts.assetOwners} owner candidates, ${candidatePool.size} pooled, ${selection.freshCount} fresh selected, ${selection.recentlyCheckedSkipped} cooling down.`,
   );
 
   return {
-    userIds: shuffle(userIds),
+    userIds,
     seedItems: seedItems.map((item) => ({
       id: item.id,
       name: item.name,
@@ -244,6 +262,9 @@ async function discoverCandidateUserIds(minimumRap) {
       value: item.value,
     })),
     candidateSourceCounts,
+    candidatePoolSize: candidatePool.size,
+    freshCandidateCount: selection.freshCount,
+    recentlyCheckedSkipped: selection.recentlyCheckedSkipped,
     sources,
   };
 }
@@ -428,17 +449,115 @@ function getTopLimiteds(inventory) {
 }
 
 async function getPresenceBatched(userIds) {
-  const results = [];
+  const presences = [];
+  const checkedIds = [];
+
   for (let index = 0; index < userIds.length; index += PRESENCE_BATCH_SIZE) {
     const batch = userIds.slice(index, index + PRESENCE_BATCH_SIZE);
     try {
-      const presences = await getUsersPresence(batch);
-      results.push(...presences);
+      const result = await getUsersPresence(batch);
+      presences.push(...result);
+      checkedIds.push(...batch);
     } catch (error) {
       console.warn("Roblox presence batch failed:", error);
     }
   }
-  return results;
+
+  return { presences, checkedIds };
+}
+
+function addCandidatesToPool(userIds, source, now = Date.now()) {
+  for (const rawUserId of userIds) {
+    const userId = Number(rawUserId);
+    if (!Number.isInteger(userId) || userId <= 0) continue;
+
+    const existing = candidatePool.get(userId) ?? {
+      userId,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      lastCheckedAt: 0,
+      sources: new Set(),
+    };
+
+    existing.lastSeenAt = now;
+    existing.sources.add(source);
+    candidatePool.set(userId, existing);
+  }
+}
+
+function pruneCandidatePool(now = Date.now()) {
+  const ttlMs = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_POOL_TTL_MS",
+    DEFAULT_POOL_TTL_MS,
+  );
+  const maxSize = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_POOL_MAX_SIZE",
+    DEFAULT_POOL_MAX_SIZE,
+  );
+
+  for (const [userId, candidate] of candidatePool) {
+    if (now - candidate.lastSeenAt > ttlMs) {
+      candidatePool.delete(userId);
+    }
+  }
+
+  if (candidatePool.size <= maxSize) return;
+
+  const oldest = [...candidatePool.values()].sort(
+    (left, right) => left.lastSeenAt - right.lastSeenAt,
+  );
+
+  for (const candidate of oldest.slice(0, candidatePool.size - maxSize)) {
+    candidatePool.delete(candidate.userId);
+  }
+}
+
+function selectCandidatesFromPool(limit, now = Date.now()) {
+  const cooldownMs = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_RECENT_CHECK_COOLDOWN_MS",
+    DEFAULT_RECENT_CHECK_COOLDOWN_MS,
+  );
+
+  const fresh = [];
+  const coolingDown = [];
+
+  for (const candidate of candidatePool.values()) {
+    if (
+      !candidate.lastCheckedAt ||
+      now - candidate.lastCheckedAt >= cooldownMs
+    ) {
+      fresh.push(candidate);
+    } else {
+      coolingDown.push(candidate);
+    }
+  }
+
+  const neverChecked = shuffle(
+    fresh.filter((candidate) => !candidate.lastCheckedAt),
+  );
+  const previouslyChecked = fresh
+    .filter((candidate) => candidate.lastCheckedAt)
+    .sort((left, right) => left.lastCheckedAt - right.lastCheckedAt);
+
+  const selected = [...neverChecked, ...previouslyChecked]
+    .slice(0, limit)
+    .map((candidate) => candidate.userId);
+
+  return {
+    userIds: selected,
+    freshCount: selected.length,
+    recentlyCheckedSkipped: coolingDown.length,
+  };
+}
+
+function markCandidatesChecked(userIds, now = Date.now()) {
+  for (const rawUserId of userIds) {
+    const userId = Number(rawUserId);
+    const candidate = candidatePool.get(userId);
+    if (candidate) {
+      candidate.lastCheckedAt = now;
+    }
+  }
 }
 
 async function mapWithConcurrency(items, concurrency, mapper) {
