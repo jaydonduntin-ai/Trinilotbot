@@ -62,11 +62,6 @@ export const targetsCommand = {
 };
 
 function buildTargetEmbeds(result) {
-  const seedPreview = (result.seedItems ?? [])
-    .slice(0, 6)
-    .map((item) => item.name)
-    .join(" · ");
-
   const summary = new EmbedBuilder()
     .setColor(result.players.length > 0 ? 0x57f287 : 0x2f3136)
     .setTitle("Automatic Roblox discovery")
@@ -75,11 +70,10 @@ function buildTargetEmbeds(result) {
         `Candidate pool: ${result.candidatePoolSize ?? result.candidateCount ?? 0}`,
         `Fresh candidates scanned: ${result.freshCandidateCount ?? result.candidateCount ?? 0}`,
         `Cooling down from recent scans: ${result.recentlyCheckedSkipped ?? 0}`,
-        `Rolimon's trade-ad candidates this refresh: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
-        `Roblox asset-owner candidates this refresh: ${result.candidateSourceCounts?.assetOwners ?? 0}`,
+        `Roblox search candidates this refresh: ${result.candidateSourceCounts?.userSearch ?? 0}`,
+        `Roblox social-graph candidates this refresh: ${result.candidateSourceCounts?.socialGraph ?? 0}`,
         `Active candidates checked: ${result.activeCount ?? 0}`,
         `RAP threshold: ${result.minimumRap.toLocaleString()}`,
-        seedPreview ? `Seed limiteds: ${truncate(seedPreview, 900)}` : null,
       ]
         .filter(Boolean)
         .join("\n"),
