@@ -115,6 +115,8 @@ function buildTargetEmbeds(result) {
         `Leaderboard users: ${result.candidateSourceCounts?.leaderboard ?? 0}`,
         `Marketplace owners: ${result.candidateSourceCounts?.marketplaceOwners ?? 0}`,
         `Verified live above threshold: ${result.verifiedCount ?? 0}`,
+        `Join-ready profiles: ${result.joinReadyCount ?? 0}`,
+        `Public server confirmed: ${result.publicServerConfirmedCount ?? 0}`,
         `Scan time: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.minimumValue !== null && result.minimumValue !== undefined
           ? `Value threshold: ${result.minimumValue.toLocaleString()}`
@@ -174,6 +176,11 @@ function buildTargetEmbeds(result) {
           inline: true,
         },
         {
+          name: "Join",
+          value: formatTargetJoin(player),
+          inline: false,
+        },
+        {
           name: "Value source",
           value: player.valueSource ?? "Unavailable",
           inline: false,
@@ -197,6 +204,33 @@ function buildTargetEmbeds(result) {
   });
 
   return [summary, ...players];
+}
+
+function formatTargetJoin(player) {
+  const links = [];
+
+  if (player.followJoinUrl) {
+    links.push(`[Join player](<${player.followJoinUrl}>)`);
+  }
+  if (player.exactJoinUrl) {
+    links.push(`[Try exact public server](<${player.exactJoinUrl}>)`);
+  }
+
+  const ids = [];
+  if (player.placeId) ids.push(`Place: \`${player.placeId}\``);
+  if (player.gameId) ids.push(`Job: \`${player.gameId}\``);
+
+  const status = player.publicServerConfirmed
+    ? "Public server confirmed"
+    : player.joinReady
+      ? "Profile follow-join available"
+      : "Join unavailable";
+
+  return [
+    status,
+    links.join(" · "),
+    ids.join(" · "),
+  ].filter(Boolean).join("\n");
 }
 
 function formatThresholds(result) {
