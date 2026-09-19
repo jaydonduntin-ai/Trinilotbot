@@ -1,12 +1,17 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+const railwayVolumePath =
+  process.env.RAILWAY_VOLUME_MOUNT_PATH?.trim() || null;
 
 const storagePath =
   process.env.ROBLOX_SCAN_WATCHLIST_PATH?.trim() ||
-  fileURLToPath(
-    new URL("../../data/scan-watchlist.json", import.meta.url),
-  );
+  (railwayVolumePath
+    ? join(railwayVolumePath, "scan-watchlist.json")
+    : fileURLToPath(
+        new URL("../../data/scan-watchlist.json", import.meta.url),
+      ));
 
 let entries = new Map();
 let initialized = false;
