@@ -1,6 +1,7 @@
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_RAP,
+  MIN_TARGET_THRESHOLD,
   MAX_TARGET_THRESHOLD,
   scanCandidatesForWatchlist,
 } from "../monitoring/target-scanner.js";
@@ -19,9 +20,9 @@ export const scanCommand = {
       option
         .setName("min_rap")
         .setDescription(
-          `Minimum RAP to store, default ${DEFAULT_TARGET_RAP.toLocaleString()}, max ${MAX_TARGET_THRESHOLD.toLocaleString()}.`,
+          `RAP to store: ${MIN_TARGET_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEFAULT_TARGET_RAP.toLocaleString()}.`,
         )
-        .setMinValue(1)
+        .setMinValue(MIN_TARGET_THRESHOLD)
         .setMaxValue(MAX_TARGET_THRESHOLD),
     )
     .addIntegerOption((option) =>
