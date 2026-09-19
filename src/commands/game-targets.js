@@ -2,6 +2,7 @@ import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_MM2_VALUE,
   DEFAULT_TARGET_COUNT,
+  DEFAULT_TARGET_VALUE,
   DEFAULT_TARGET_RAP,
   MAX_TARGETS,
   scanGameTargets,
@@ -20,7 +21,7 @@ function createGameTargetCommand({
         .setName(name)
         .setDescription(
           supportsGameValue
-            ? `Find active ${gameLabel} players by verified game inventory value.`
+            ? `Find current ${gameLabel} players; optionally require verified MM2 profile value.`
             : `Find active ${gameLabel} players above a Roblox RAP threshold.`,
         );
 
@@ -30,7 +31,16 @@ function createGameTargetCommand({
             option
               .setName("min_value")
               .setDescription(
-                `Minimum ${gameLabel} inventory value, default ${DEFAULT_MM2_VALUE.toLocaleString()}.`,
+                `Minimum Roblox collectible value, default ${DEFAULT_TARGET_VALUE.toLocaleString()}.`,
+              )
+              .setMinValue(1)
+              .setMaxValue(2_000_000_000),
+          )
+          .addIntegerOption((option) =>
+            option
+              .setName("min_mm2_value")
+              .setDescription(
+                "Optional strict RBLXValue MM2 profile/inventory value floor.",
               )
               .setMinValue(1)
               .setMaxValue(2_000_000_000),
@@ -69,8 +79,12 @@ function createGameTargetCommand({
 
     async execute(interaction) {
       const minimumRap = interaction.options.getInteger("min_rap");
-      const minimumGameValue = supportsGameValue
-        ? (interaction.options.getInteger("min_value") ?? DEFAULT_MM2_VALUE)
+      const minimumValue = supportsGameValue
+        ? (interaction.options.getInteger("min_value") ??
+          DEFAULT_TARGET_VALUE)
+        : null;
+      const minimumMm2Value = supportsGameValue
+        ? interaction.options.getInteger("min_mm2_value")
         : null;
       const limit =
         interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
@@ -78,26 +92,35 @@ function createGameTargetCommand({
       await interaction.deferReply({ ephemeral: true });
 
       try {
-        const result = supportsGameValue
-          ? await scanMm2ValueTargets({
-              minimumGameValue,
-              minimumRap,
-              limit,
-            })
-          : await scanGameTargets({
-              gameKey,
-              minimumRap: minimumRap ?? undefined,
-              limit,
-            });
+        const result =
+          supportsGameValue && minimumMm2Value !== null
+            ? await scanMm2ValueTargets({
+                minimumGameValue: minimumMm2Value,
+                minimumRap,
+                limit,
+              })
+            : await scanGameTargets({
+                gameKey,
+                minimumValue: supportsGameValue ? minimumValue : null,
+                minimumRap:
+                  supportsGameValue
+                    ? minimumRap
+                    : (minimumRap ?? undefined),
+                limit,
+              });
 
         await interaction.editReply({
           content:
             result.players.length > 0
               ? supportsGameValue
-                ? `Found ${result.players.length} active ${gameLabel} player${result.players.length === 1 ? "" : "s"} at or above ${result.minimumGameValue.toLocaleString()} MM2 value.`
+                ? minimumMm2Value !== null
+                  ? `Found ${result.players.length} current ${gameLabel} player${result.players.length === 1 ? "" : "s"} with verified RBLXValue MM2 value at or above ${minimumMm2Value.toLocaleString()}.`
+                  : `Found ${result.players.length} current ${gameLabel} player${result.players.length === 1 ? "" : "s"} at or above ${minimumValue.toLocaleString()} Roblox collectible value.`
                 : `Found ${result.players.length} active ${gameLabel} player${result.players.length === 1 ? "" : "s"} at or above ${result.minimumRap.toLocaleString()} Roblox RAP.`
               : supportsGameValue
-                ? `No active ${gameLabel} player at or above ${result.minimumGameValue.toLocaleString()} MM2 value was verified in this pass.`
+                ? minimumMm2Value !== null
+                  ? `No current ${gameLabel} player with a matching RBLXValue MM2 profile at or above ${minimumMm2Value.toLocaleString()} was verified in this pass.`
+                  : `No current ${gameLabel} player at or above ${minimumValue.toLocaleString()} Roblox collectible value was verified in this pass.`
                 : `No active ${gameLabel} player at or above ${result.minimumRap.toLocaleString()} Roblox RAP was verified in this pass.`,
           embeds: buildGameTargetEmbeds(result).slice(0, 10),
         });
@@ -147,7 +170,10 @@ function buildGameTargetEmbeds(result) {
           : null,
         `Verified above threshold: ${result.verifiedCount ?? 0}`,
         result.minimumGameValue !== undefined
-          ? `MM2 value threshold: ${result.minimumGameValue.toLocaleString()}`
+          ? `Strict MM2 profile value: ${result.minimumGameValue.toLocaleString()}`
+          : null,
+        result.minimumValue !== null && result.minimumValue !== undefined
+          ? `Roblox collectible value: ${result.minimumValue.toLocaleString()}`
           : null,
         result.minimumRap !== null && result.minimumRap !== undefined
           ? `Roblox RAP threshold: ${result.minimumRap.toLocaleString()}`
@@ -163,7 +189,7 @@ function buildGameTargetEmbeds(result) {
       inline: false,
     })
     .setFooter({
-      text: "Game membership is based on Roblox public presence. Game-specific inventory values are shown only when a configured provider verifies them.",
+      text: "Game membership is based on Roblox public presence. RBLXValue MM2 data is enrichment unless min_mm2_value is explicitly used.",
     })
     .setTimestamp();
 
