@@ -200,6 +200,87 @@ export async function getUserRobloxGroups(userId) {
     .filter(Boolean);
 }
 
+export async function getUserFollowers(
+  userId,
+  { limit = 100, cursor = null } = {},
+) {
+  return getPagedSocialUsers(userId, "followers", { limit, cursor });
+}
+
+export async function getUserFollowings(
+  userId,
+  { limit = 100, cursor = null } = {},
+) {
+  return getPagedSocialUsers(userId, "followings", { limit, cursor });
+}
+
+async function getPagedSocialUsers(
+  userId,
+  relation,
+  { limit = 100, cursor = null } = {},
+) {
+  const normalizedId = Number(userId);
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    return { users: [], nextPageCursor: null };
+  }
+
+  const requestedLimit = [10, 25, 50, 100].includes(Number(limit))
+    ? Number(limit)
+    : 100;
+  const cursorQuery = cursor
+    ? `&cursor=${encodeURIComponent(cursor)}`
+    : "";
+
+  const payload = await fetchRobloxJson(
+    `${FRIENDS_API_URL}/v1/users/${encodeURIComponent(
+      normalizedId,
+    )}/${relation}?sortOrder=Asc&limit=${requestedLimit}${cursorQuery}`,
+  );
+
+  return {
+    users: Array.isArray(payload?.data) ? payload.data : [],
+    nextPageCursor: payload?.nextPageCursor ?? null,
+  };
+}
+
+export async function getFriendGroupRoles(userId) {
+  const normalizedId = Number(userId);
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    return [];
+  }
+
+  const payload = await fetchRobloxJson(
+    `${GROUPS_API_URL}/v1/users/${encodeURIComponent(
+      normalizedId,
+    )}/friends/groups/roles`,
+  );
+
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  const groups = [];
+
+  for (const entry of data) {
+    const candidates = [
+      entry?.group,
+      ...(Array.isArray(entry?.groups) ? entry.groups : []),
+      ...(Array.isArray(entry?.roles) ? entry.roles : []),
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      const group = candidate?.group ?? candidate;
+      const id = Number(group?.id ?? group?.groupId);
+      if (!Number.isInteger(id) || id <= 0) continue;
+      groups.push({
+        id,
+        name: group?.name ?? null,
+      });
+    }
+  }
+
+  return [
+    ...new Map(groups.map((group) => [group.id, group])).values(),
+  ];
+}
+
 export async function getUserFriends(userId) {
   const normalizedId = Number(userId);
   if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
