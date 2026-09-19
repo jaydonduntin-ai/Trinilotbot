@@ -62,13 +62,16 @@ export const scanCommand = {
           [
             `Threshold: ${minimumRap.toLocaleString()}+ RAP`,
             `Candidates checked: ${result.checkedCount}`,
-            `Already-known users skipped: ${result.alreadyWatchedSkipped ?? 0}`,
+            `Watchlist users skipped: ${result.alreadyWatchedSkipped ?? 0}`,
+            `Previous /target users skipped: ${result.previousTargetSkipped ?? 0}`,
+            `Previous /scan candidates skipped: ${result.previousScanSkipped ?? 0}`,
+            `Total expansion exclusions: ${result.totalExcludedFromExpansion ?? 0}`,
             `Qualifying found: ${result.players.length}`,
             `Newly added: ${stored.added}`,
             `Already watched: ${stored.existing}`,
             `Total watchlist: ${stored.total}`,
             "",
-            "The background watcher will alert this channel when a stored player changes into In Game status.",
+            "Each /scan pass now expands forward instead of replaying prior /target results or candidates already attempted at the same threshold.",
           ].join("\n"),
         )
         .setFooter({
