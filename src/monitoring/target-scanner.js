@@ -40,6 +40,7 @@ export const DEFAULT_TARGET_VALUE = 150_000;
 export const DEFAULT_MM2_VALUE = 150_000;
 export const DEFAULT_TARGET_COUNT = 10;
 export const MAX_TARGETS = 10;
+export const MAX_TARGET_THRESHOLD = 2_500_000;
 
 const GAME_TARGETS = {
   mm2: {
