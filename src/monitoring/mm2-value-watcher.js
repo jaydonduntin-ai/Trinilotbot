@@ -14,6 +14,7 @@ import {
 
 const DEFAULT_MM2_VALUE_WATCH_INTERVAL_MS = 2 * 60 * 1000;
 const PRESENCE_BATCH_SIZE = 50;
+let mm2ValueWatcherRunning = false;
 
 export function startMm2ValueWatcher(client) {
   const intervalMs = readPositiveInteger(
@@ -21,10 +22,18 @@ export function startMm2ValueWatcher(client) {
     DEFAULT_MM2_VALUE_WATCH_INTERVAL_MS,
   );
 
-  const run = () =>
-    runMm2ValueWatchCycle(client).catch((error) => {
+  const run = async () => {
+    if (mm2ValueWatcherRunning) return;
+    mm2ValueWatcherRunning = true;
+
+    try {
+      await runMm2ValueWatchCycle(client);
+    } catch (error) {
       console.error("MM2 value watcher run failed:", error);
-    });
+    } finally {
+      mm2ValueWatcherRunning = false;
+    }
+  };
 
   setTimeout(run, 45_000);
   const interval = setInterval(run, intervalMs);
