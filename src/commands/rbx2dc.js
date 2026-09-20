@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "discord.js";
+import { MessageFlags, SlashCommandBuilder } from "discord.js";
 import { lookupRobloxUser } from "../roblox/api.js";
 import { lookupRobloxToDiscord } from "../sources/associations.js";
 
@@ -17,7 +17,7 @@ export const rbx2dcCommand = {
 
   async execute(interaction) {
     const identifier = interaction.options.getString("username", true).trim();
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       const profileIdMatch = identifier.match(/roblox\.com\/users\/(\d+)/i);
