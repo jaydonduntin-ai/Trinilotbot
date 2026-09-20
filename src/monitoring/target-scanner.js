@@ -1497,12 +1497,18 @@ export async function scanMm2JoinActivity({
     }
 
     const startedAt = Date.now();
+    const usingDirectFallback = Date.now() < presenceApiBackoffUntil;
     const presenceScan = await getPresenceBatched(scanIds, {
       maxAttempts: 1,
       interBatchDelayMs: 900,
       stopOnRateLimit: true,
-      fallbackFetcher: getUsersPresenceFallback,
-      fallbackOnRateLimit: true,
+      presenceFetcher: usingDirectFallback
+        ? getUsersPresenceFallback
+        : getUsersPresence,
+      fallbackFetcher: usingDirectFallback
+        ? null
+        : getUsersPresenceFallback,
+      fallbackOnRateLimit: !usingDirectFallback,
     });
 
     const checkedCount = presenceScan.checkedIds.length;
@@ -1555,7 +1561,8 @@ export async function scanMm2JoinActivity({
       scanElapsedMs: Date.now() - startedAt,
       liveCacheHit: false,
       presenceRateLimited: presenceScan.rateLimited === true,
-      presenceFallbackUsed: presenceScan.usedFallback === true,
+      presenceFallbackUsed:
+        usingDirectFallback || presenceScan.usedFallback === true,
       scanCursorStart: start,
       scanCursorNext: mm2PresenceCursor,
       sources: [
