@@ -77,7 +77,7 @@ const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 5_000;
 const DEFAULT_POOL_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
-const TARGET_POOL_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+const TARGET_POOL_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const LIMITED_OWNER_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const GROUP_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const MARKETPLACE_REFRESH_INTERVAL_MS = 8 * 60 * 1000;
@@ -164,6 +164,7 @@ let lastMarketplaceRefreshAt = 0;
 let lastJailbreakTradeRefreshAt = 0;
 let limitedSeedCursor = 0;
 let candidateRefreshPromise = null;
+let lastCandidatePoolRefreshAt = 0;
 
 async function ensureTargetHistoryHydrated() {
   if (targetHistoryHydrated) return;
@@ -191,6 +192,43 @@ async function ensureTargetHistoryHydrated() {
   await targetHistoryHydratePromise;
 }
 
+async function refreshCandidatePoolLightweight() {
+  const now = Date.now();
+  const watchlistUserIds = await syncWatchlistCandidates(now);
+
+  const tradeAdsResult = await getRecentTradeAdPlayers().catch((error) => {
+    console.warn("Rolimon's trade-ad discovery failed:", error);
+    return { players: [] };
+  });
+  const tradeAdUserIds = [
+    ...new Set(
+      (tradeAdsResult?.players ?? [])
+        .map((player) => Number(player?.userId))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+  addCandidatesToPool(tradeAdUserIds, "Rolimon's recent trade ads", now);
+
+  let leaderboardUserIds = [];
+  if (
+    now - lastLeaderboardRefreshAt >=
+    ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS
+  ) {
+    leaderboardUserIds = await refreshRolimonsLeaderboardCandidates();
+    lastLeaderboardRefreshAt = now;
+  }
+
+  pruneCandidatePool();
+  lastCandidatePoolRefreshAt = now;
+
+  return {
+    ...getPoolSourceCounts(),
+    watchlist: watchlistUserIds.length,
+    tradeAds: tradeAdUserIds.length,
+    leaderboard: leaderboardUserIds.length,
+  };
+}
+
 export function startTargetCandidatePoolWarmup() {
   if (targetPoolWarmupTimer || targetLiveCacheTimer) return;
 
@@ -202,6 +240,17 @@ export function startTargetCandidatePoolWarmup() {
       );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
+    }
+  };
+
+  const warmCandidates = async () => {
+    try {
+      const stats = await refreshCandidatePoolLightweight();
+      console.info(
+        `Target index warmup: ${candidatePool.size} pooled · ${stats.leaderboard ?? 0} leaderboard · ${stats.watchlist ?? 0} scan-watchlist.`,
+      );
+    } catch (error) {
+      console.warn("Lightweight target warmup failed:", error);
     }
   };
 
@@ -218,7 +267,7 @@ export function startTargetCandidatePoolWarmup() {
 
   // Restore durable dedupe history before warming the verified index.
   void ensureTargetHistoryHydrated()
-    .then(refreshCandidates)
+    .then(warmCandidates)
     .then(refreshLive);
 
   targetPoolWarmupTimer = setInterval(
@@ -467,6 +516,52 @@ function getFreshLiveCachePresences({
     .map(([, entry]) => entry.presence);
 }
 
+function getFreshGameLiveCachePresences(
+  game,
+  { minimumRap = null, limit = MAX_TARGETS } = {},
+) {
+  const ttlMs = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_LIVE_CACHE_TTL_MS",
+    DEFAULT_TARGET_LIVE_CACHE_TTL_MS,
+  );
+  pruneLiveTargetCache(Date.now(), ttlMs);
+
+  return [...liveTargetCache.entries()]
+    .filter(([userId, entry]) => {
+      const candidate = candidatePool.get(Number(userId));
+      if (!candidate || !isPresenceForGame(entry?.presence, game)) {
+        return false;
+      }
+
+      if (
+        minimumRap !== null &&
+        minimumRap !== undefined &&
+        (!Number.isFinite(Number(candidate.lastKnownRap)) ||
+          Number(candidate.lastKnownRap) < Number(minimumRap))
+      ) {
+        return false;
+      }
+
+      return true;
+    })
+    .sort((left, right) => {
+      const leftCandidate = candidatePool.get(Number(left[0]));
+      const rightCandidate = candidatePool.get(Number(right[0]));
+      return (
+        getCandidatePriority(
+          rightCandidate,
+          { minimumValue: null, minimumRap },
+        ) -
+        getCandidatePriority(
+          leftCandidate,
+          { minimumValue: null, minimumRap },
+        )
+      );
+    })
+    .slice(0, Math.max(1, Number(limit) || MAX_TARGETS))
+    .map(([, entry]) => entry.presence);
+}
+
 export function getTargetLiveCacheStats() {
   const ttlMs = getPositiveIntegerEnv(
     "ROBLOX_TARGET_LIVE_CACHE_TTL_MS",
@@ -686,6 +781,7 @@ export async function scanDiscoveredTargets({
   let belowValueCount = 0;
   let rapUnavailableCount = 0;
   let belowRapCount = 0;
+  let presenceRateLimited = false;
   let profileUnavailableCount = 0;
   let verificationErrorCount = 0;
   let presenceRateLimited = false;
@@ -1278,13 +1374,122 @@ export async function scanMm2JoinActivity({
   minimumRap = DEFAULT_TARGET_RAP,
   limit = DEFAULT_TARGET_COUNT,
 } = {}) {
-  return scanGameTargets({
+  const game = GAME_TARGETS.mm2;
+  const requestedLimit = Math.min(
+    MAX_TARGETS,
+    Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
+  );
+
+  await syncWatchlistCandidates();
+
+  const cachedPresences = getFreshGameLiveCachePresences(game, {
+    minimumRap,
+    limit: requestedLimit,
+  });
+
+  if (cachedPresences.length > 0) {
+    const cachedPlayers = (
+      await mapWithConcurrency(
+        cachedPresences,
+        VERIFY_CONCURRENCY,
+        (presence) =>
+          buildDiscoveredTargetPlayer(presence, {
+            minimumValue: null,
+            minimumRap,
+            includeGameValue: false,
+          }).catch(() => null),
+      )
+    )
+      .filter((player) => player?.qualifies)
+      .map(({ qualifies, ...player }) => ({
+        ...player,
+        presenceFreshness: "recent",
+      }))
+      .slice(0, requestedLimit);
+
+    if (
+      cachedPlayers.length >= requestedLimit ||
+      Date.now() < presenceApiBackoffUntil
+    ) {
+      return {
+        gameKey: "mm2",
+        gameLabel: game.label,
+        universeId: game.universeId,
+        minimumValue: null,
+        minimumRap,
+        players: cachedPlayers,
+        candidateCount: candidatePool.size,
+        candidatePoolSize: candidatePool.size,
+        candidateSourceCounts: getPoolSourceCounts(),
+        presenceScannedCount: 0,
+        gameActiveCount: cachedPlayers.length,
+        verificationAttempts: cachedPlayers.length,
+        valueUnavailableCount: 0,
+        belowValueCount: 0,
+        rapUnavailableCount: 0,
+        belowRapCount: 0,
+        verifiedCount: cachedPlayers.length,
+        scanElapsedMs: 0,
+        liveCacheHit: true,
+        presenceRateLimited: Date.now() < presenceApiBackoffUntil,
+        sources: [
+          "Background verified RAP index",
+          "Background Roblox live-presence cache",
+          "Murder Mystery 2 activity filter",
+        ],
+      };
+    }
+  }
+
+  const fresh = await scanGameTargets({
     gameKey: "mm2",
     minimumValue: null,
     minimumRap,
-    limit,
+    limit: requestedLimit,
     includeGameValue: false,
   });
+
+  if (cachedPresences.length === 0) {
+    return {
+      ...fresh,
+      liveCacheHit: false,
+      presenceRateLimited:
+        fresh.presenceScannedCount === 0 &&
+        Date.now() < presenceApiBackoffUntil,
+    };
+  }
+
+  const cachedPlayers = (
+    await mapWithConcurrency(
+      cachedPresences,
+      VERIFY_CONCURRENCY,
+      (presence) =>
+        buildDiscoveredTargetPlayer(presence, {
+          minimumValue: null,
+          minimumRap,
+          includeGameValue: false,
+        }).catch(() => null),
+    )
+  ).filter((player) => player?.qualifies);
+
+  const merged = new Map();
+  for (const player of [...cachedPlayers, ...(fresh.players ?? [])]) {
+    const id = Number(player?.id);
+    if (Number.isInteger(id) && id > 0 && !merged.has(id)) {
+      merged.set(id, player);
+    }
+  }
+
+  return {
+    ...fresh,
+    players: [...merged.values()].slice(0, requestedLimit),
+    verifiedCount: Math.min(requestedLimit, merged.size),
+    liveCacheHit: cachedPlayers.length > 0,
+    gameActiveCount: Math.max(
+      fresh.gameActiveCount ?? 0,
+      cachedPlayers.length,
+    ),
+  };
 }
 
 export async function scanGameTargets({
@@ -1338,6 +1543,8 @@ export async function scanGameTargets({
     );
     const presenceScan = await getPresenceBatched(wave);
     presenceScannedCount += presenceScan.checkedIds.length;
+
+    if (presenceScan.rateLimited) presenceRateLimited = true;
 
     const gamePresences = presenceScan.presences
       .filter((presence) => isPresenceForGame(presence, game))
@@ -1428,6 +1635,7 @@ export async function scanGameTargets({
     rapUnavailableCount,
     belowRapCount,
     verifiedCount: stillInGamePlayers.length,
+    presenceRateLimited,
     scanElapsedMs: Date.now() - startedAt,
     sources: [
       ...new Set([
@@ -1477,8 +1685,11 @@ async function discoverCandidateUserIds({
   await syncWatchlistCandidates();
 
   if (candidatePool.size === 0) {
-    await withTimeout(refreshCandidatePool(), 8_000, null);
-  } else {
+    await withTimeout(refreshCandidatePoolLightweight(), 8_000, null);
+  } else if (
+    Date.now() - lastCandidatePoolRefreshAt >=
+    TARGET_POOL_REFRESH_INTERVAL_MS
+  ) {
     void refreshCandidatePool();
   }
 
@@ -1521,6 +1732,7 @@ async function refreshCandidatePool() {
       return getPoolSourceCounts();
     })
     .finally(() => {
+      lastCandidatePoolRefreshAt = Date.now();
       candidateRefreshPromise = null;
     });
 
