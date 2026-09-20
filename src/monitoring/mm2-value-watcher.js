@@ -39,7 +39,7 @@ async function runMm2ValueWatchCycle(client) {
 
   if (refresh) {
     console.info(
-      `MM2 value watch index: ${refresh.knownCount ?? 0} known · ${refresh.checked ?? 0} refreshed · ${refresh.persisted ?? 0} stored 100k+.`,
+      `MM2 value watch index: ${refresh.knownCount ?? 0} known · ${refresh.checked ?? 0} refreshed · ${refresh.persisted ?? 0} stored 50k+.`,
     );
   }
 
@@ -118,7 +118,7 @@ async function publishMm2ValueAlert(client, entry, presence) {
         value:
           typeof entry.mm2Value === "number"
             ? `${entry.mm2Value.toLocaleString()}+`
-            : "Verified 100K+",
+            : "Verified 50K+",
         inline: true,
       },
       {
