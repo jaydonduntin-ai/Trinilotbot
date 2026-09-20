@@ -170,6 +170,7 @@ let liveTargetCursor = 0;
 let lastLiveCacheRefreshAt = 0;
 let liveCacheBackoffUntil = 0;
 let presenceApiBackoffUntil = 0;
+let discoveryApiBackoffUntil = 0;
 let searchTermCursor = 0;
 let groupSearchTermCursor = 0;
 let leaderboardPageCursor = 1;
@@ -289,8 +290,7 @@ export function startTargetCandidatePoolWarmup() {
 
   // Restore durable dedupe history before warming the verified index.
   void ensureTargetHistoryHydrated()
-    .then(warmCandidates)
-    .then(refreshLive);
+    .then(warmCandidates);
 
   targetPoolWarmupTimer = setInterval(
     refreshCandidates,
@@ -886,7 +886,12 @@ async function scanDiscoveredTargetsInternal({
       );
 
     for (const presence of inGamePresences) {
-      activeSeen.set(Number(presence.userId), presence);
+      const userId = Number(presence.userId);
+      activeSeen.set(userId, presence);
+      liveTargetCache.set(userId, {
+        presence,
+        checkedAt: Date.now(),
+      });
     }
 
     if (
@@ -959,9 +964,20 @@ async function scanDiscoveredTargetsInternal({
     }
   }
 
-  const stillInGamePlayers = await revalidateCurrentlyInGame(
-    verifiedPlayers,
-  );
+  const stillInGamePlayers =
+    presenceFallbackUsed || presenceRateLimited
+      ? {
+          players: verifiedPlayers.map((player) => ({
+            ...player,
+            presenceVerifiedAt: Date.now(),
+          })),
+          leftGameCount: 0,
+          unavailableCount: 0,
+          rateLimited: presenceRateLimited,
+          usedFallback: presenceFallbackUsed,
+        }
+      : await revalidateCurrentlyInGame(verifiedPlayers);
+
   presenceRateLimited =
     presenceRateLimited || stillInGamePlayers.rateLimited === true;
   const selectedPlayers = shuffle(stillInGamePlayers.players)
@@ -2776,7 +2792,7 @@ async function refreshGeneralCandidatePool() {
   // is verified against Roblox's public asset-owner endpoint.
   let limitedOwnerUserIds = [];
   if (
-    now >= presenceApiBackoffUntil &&
+    now >= discoveryApiBackoffUntil &&
     now - lastLimitedOwnerRefreshAt >= LIMITED_OWNER_REFRESH_INTERVAL_MS
   ) {
     limitedOwnerUserIds = await refreshLimitedOwnerCandidates(
@@ -2809,14 +2825,14 @@ async function refreshGeneralCandidatePool() {
     marketplaceGroupMembers: 0,
   };
   if (
-    now >= presenceApiBackoffUntil &&
+    now >= discoveryApiBackoffUntil &&
     now - lastMarketplaceRefreshAt >= MARKETPLACE_REFRESH_INTERVAL_MS
   ) {
     marketplaceStats = await refreshMarketplaceCandidateSources().catch(
       (error) => {
         if (Number(error?.status) === 429) {
-          presenceApiBackoffUntil = Math.max(
-            presenceApiBackoffUntil,
+          discoveryApiBackoffUntil = Math.max(
+            discoveryApiBackoffUntil,
             Date.now() + DEFAULT_PRESENCE_API_BACKOFF_MS,
           );
         }
@@ -3667,8 +3683,8 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
           return result.owners;
         } catch (error) {
           if (Number(error?.status) === 429) {
-            presenceApiBackoffUntil = Math.max(
-              presenceApiBackoffUntil,
+            discoveryApiBackoffUntil = Math.max(
+              discoveryApiBackoffUntil,
               Date.now() + DEFAULT_PRESENCE_API_BACKOFF_MS,
             );
           }
