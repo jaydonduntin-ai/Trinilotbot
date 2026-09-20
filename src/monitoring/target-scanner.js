@@ -784,7 +784,6 @@ export async function scanDiscoveredTargets({
   let presenceRateLimited = false;
   let profileUnavailableCount = 0;
   let verificationErrorCount = 0;
-  let presenceRateLimited = false;
   const maxActiveToVerify = getPositiveIntegerEnv(
     "ROBLOX_TARGET_MAX_ACTIVE_TO_VERIFY",
     DEFAULT_MAX_ACTIVE_TO_VERIFY,
@@ -853,7 +852,6 @@ export async function scanDiscoveredTargets({
           buildDiscoveredTargetPlayer(presence, {
             minimumValue,
             minimumRap,
-            includeGameValue,
           }).catch((error) => {
             console.warn(
               `Target verification failed for Roblox user ${presence.userId}:`,
@@ -1528,6 +1526,7 @@ export async function scanGameTargets({
   let belowValueCount = 0;
   let rapUnavailableCount = 0;
   let belowRapCount = 0;
+  let presenceRateLimited = false;
 
   for (
     let offset = 0;
@@ -1541,7 +1540,11 @@ export async function scanGameTargets({
       offset,
       offset + DEFAULT_GAME_SCAN_WAVE_SIZE,
     );
-    const presenceScan = await getPresenceBatched(wave);
+    const presenceScan = await getPresenceBatched(wave, {
+      maxAttempts: 1,
+      interBatchDelayMs: 1_000,
+      stopOnRateLimit: true,
+    });
     presenceScannedCount += presenceScan.checkedIds.length;
 
     if (presenceScan.rateLimited) presenceRateLimited = true;
@@ -1584,6 +1587,7 @@ export async function scanGameTargets({
           buildDiscoveredTargetPlayer(presence, {
             minimumValue,
             minimumRap,
+            includeGameValue,
           }).catch((error) => {
             console.warn(
               `${game.label} target verification failed for Roblox user ${presence.userId}:`,
