@@ -1401,10 +1401,10 @@ export async function scanMm2JoinActivity({
     MAX_TARGETS,
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
   );
-  const mm2ValueFloor = Math.max(
-    0,
-    Number(minimumMm2Value) || DEFAULT_MM2_VALUE,
-  );
+  const parsedMm2Value = Number(minimumMm2Value);
+  const mm2ValueFloor = Number.isFinite(parsedMm2Value)
+    ? Math.max(0, parsedMm2Value)
+    : DEFAULT_MM2_VALUE;
 
   activeInteractivePresenceScans += 1;
   try {
