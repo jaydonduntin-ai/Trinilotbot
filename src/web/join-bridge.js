@@ -27,6 +27,13 @@ export function startJoinBridge() {
           return sendNotFound(res);
         }
 
+        const directWebJoin =
+          `https://www.roblox.com/games/start?userId=${encodeURIComponent(userId)}`;
+
+        if (isDesktopRequest(req)) {
+          return sendRedirect(res, directWebJoin);
+        }
+
         return sendJoinPage(res, {
           title: "Join Roblox player",
           appUrl: `roblox://userId=${encodeURIComponent(userId)}`,
@@ -47,6 +54,14 @@ export function startJoinBridge() {
           return sendNotFound(res);
         }
 
+        const directWebJoin =
+          `https://www.roblox.com/games/start?placeId=${encodeURIComponent(placeId)}` +
+          `&gameInstanceId=${encodeURIComponent(gameId)}`;
+
+        if (isDesktopRequest(req)) {
+          return sendRedirect(res, directWebJoin);
+        }
+
         return sendJoinPage(res, {
           title: "Join Roblox server",
           appUrl:
@@ -63,6 +78,13 @@ export function startJoinBridge() {
         const placeId = Number(gameMatch[1]);
         if (!Number.isInteger(placeId) || placeId <= 0) {
           return sendNotFound(res);
+        }
+
+        const directWebJoin =
+          `https://www.roblox.com/games/start?placeId=${encodeURIComponent(placeId)}`;
+
+        if (isDesktopRequest(req)) {
+          return sendRedirect(res, directWebJoin);
         }
 
         return sendJoinPage(res, {
@@ -143,6 +165,22 @@ function sendJoinPage(
     "Referrer-Policy": "no-referrer",
   });
   res.end(html);
+}
+
+function isDesktopRequest(req) {
+  const userAgent = String(req.headers["user-agent"] ?? "").toLowerCase();
+  const mobilePattern =
+    /iphone|ipad|ipod|android|mobile|windows phone|opera mini|iemobile/;
+  return !mobilePattern.test(userAgent);
+}
+
+function sendRedirect(res, location) {
+  res.writeHead(302, {
+    Location: location,
+    "Cache-Control": "no-store, max-age=0",
+    "Referrer-Policy": "no-referrer",
+  });
+  res.end();
 }
 
 function sendNotFound(res) {
