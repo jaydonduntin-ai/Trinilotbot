@@ -35,6 +35,7 @@ import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
 import { getRblxValueProfile } from "../providers/rblxvalue.js";
 import { getScanWatchlist } from "../storage/scan-watchlist.js";
+import { addMm2ValuePlayers } from "../storage/mm2-value-watchlist.js";
 import {
   addScanAttemptIds,
   addScanReservedIds,
@@ -1822,6 +1823,13 @@ async function refreshMm2ValueIndex({
           available: true,
           qualifies:
             Number(profile.totalValue) >= Number(minimumMm2Value),
+          mm2Value: Number(profile.totalValue),
+          mm2ItemCount:
+            Number.isFinite(Number(profile?.itemCount))
+              ? Number(profile.itemCount)
+              : null,
+          mm2ValueSource:
+            profile?.source ?? "RBLXValue API v2 profile",
         };
       } catch (error) {
         candidate.lastKnownMm2ValueAt = Date.now();
@@ -1838,14 +1846,49 @@ async function refreshMm2ValueIndex({
     },
   );
 
+  const watchablePlayers = results
+    .filter(
+      (result) =>
+        result?.available &&
+        Number.isFinite(Number(result?.mm2Value)) &&
+        Number(result.mm2Value) >= DEFAULT_MM2_VALUE,
+    )
+    .map((result) => ({
+      userId: result.userId,
+      mm2Value: Number(result.mm2Value),
+      mm2ItemCount: result.mm2ItemCount ?? null,
+      mm2ValueSource:
+        result.mm2ValueSource ?? "RBLXValue API v2 profile",
+    }));
+
+  const persisted =
+    watchablePlayers.length > 0
+      ? await addMm2ValuePlayers(watchablePlayers)
+      : { added: 0, updated: 0, total: 0 };
+
   return {
     checked: results.length,
     available: results.filter((result) => result?.available).length,
     unavailable: results.filter((result) => !result?.available).length,
     qualified: results.filter((result) => result?.qualifies).length,
+    persisted: watchablePlayers.length,
+    watchlistTotal: persisted.total ?? 0,
     knownCount: getKnownMm2ValueCandidateCount(),
     elapsedMs: Date.now() - startedAt,
   };
+}
+
+export async function refreshMm2ValueWatchCandidates() {
+  await syncWatchlistCandidates();
+
+  if (candidatePool.size === 0) {
+    await withTimeout(refreshCandidatePoolLightweight(), 8_000, null);
+  }
+
+  return refreshMm2ValueIndex({
+    minimumMm2Value: DEFAULT_MM2_VALUE,
+    minimumRap: null,
+  });
 }
 
 function getIndexedMm2ValueCandidateIds({
@@ -2300,6 +2343,10 @@ export async function scanGameTargets({
       ]),
     ],
   };
+}
+
+export function isMm2Presence(presence) {
+  return isPresenceForGame(presence, GAME_TARGETS.mm2);
 }
 
 function isPresenceForGame(presence, game) {
