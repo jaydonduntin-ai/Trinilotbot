@@ -46,7 +46,7 @@ import {
 
 export const DEFAULT_TARGET_RAP = 450_000;
 export const DEFAULT_TARGET_VALUE = 150_000;
-export const DEFAULT_MM2_VALUE = 100_000;
+export const DEFAULT_MM2_VALUE = 50_000;
 export const DEFAULT_MM2_RAP = 150_000;
 export const DEFAULT_TARGET_COUNT = 10;
 export const MAX_TARGETS = 10;
