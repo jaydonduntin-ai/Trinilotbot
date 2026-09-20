@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "discord.js";
+import { MessageFlags, SlashCommandBuilder } from "discord.js";
 import {
   getAlertSubscription,
   setAlertSubscription,
@@ -30,7 +30,7 @@ export const alertsCommand = {
         : "disabled";
       await interaction.reply({
         content: `Roblox monitor alerts are currently **${status}** for you.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -41,7 +41,7 @@ export const alertsCommand = {
       content: enabled
         ? "Roblox monitor alerts are enabled for you."
         : "Roblox monitor alerts are disabled for you.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 };
