@@ -77,7 +77,7 @@ const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 5_000;
 const DEFAULT_POOL_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
-const TARGET_POOL_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const TARGET_POOL_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const LIMITED_OWNER_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const GROUP_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const MARKETPLACE_REFRESH_INTERVAL_MS = 8 * 60 * 1000;
@@ -86,13 +86,13 @@ const DEFAULT_OWNERS_PER_ITEM = 20;
 const DEFAULT_SEED_MIN_ITEM_RAP = 75_000;
 
 const MANUAL_LIMITED_OWNER_SEEDS = [
-  { id: 158380697314856, name: "SSHF" },
+  { id: 494291269, name: "SSHF" },
   { id: 553970961, name: "Green Queen of the Night" },
   { id: 1365767, name: "Valkyrie Helm" },
   { id: 439945661, name: "SKOTN" },
   { id: 1744060292, name: "Poisoned Horns" },
 ];
-const OWNER_CONCURRENCY = 4;
+const OWNER_CONCURRENCY = 1;
 const OWNER_DISCOVERY_BUDGET_MS = 12_000;
 const SEARCH_TERMS_PER_REFRESH = 12;
 const SOCIAL_SEEDS_PER_REFRESH = 10;
@@ -119,7 +119,7 @@ const GROUP_WALL_SEEDS_PER_REFRESH = 6;
 const GROUP_RELATIONSHIP_SEEDS_PER_REFRESH = 4;
 const GROUP_MEMBER_LIMIT = 50;
 const GROUP_CONCURRENCY = 3;
-const MARKETPLACE_OWNER_SEEDS = 8;
+const MARKETPLACE_OWNER_SEEDS = 3;
 const MARKETPLACE_GROUP_SEEDS = 6;
 const MARKETPLACE_OWNER_LIMIT = 20;
 const PRESENCE_BATCH_SIZE = 50;
@@ -128,6 +128,9 @@ const MM2_PROFILE_CHECK_LIMIT = 24;
 const MM2_PROFILE_CONCURRENCY = 2;
 const MM2_SCAN_WAVE_SIZE = 300;
 const MM2_SCAN_TIME_BUDGET_MS = 45_000;
+const MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS = 90_000;
+const MM2_ACTIVITY_SWEEP_CHUNK_SIZE = 500;
+const MM2_ACTIVITY_THROTTLE_PAUSE_MS = 12_000;
 
 const SEARCH_TERMS = [
   "pro","king","queen","dark","shadow","cool","game","player","star","wolf",
@@ -1494,40 +1497,90 @@ export async function scanMm2JoinActivity({
       };
     }
 
-    const scanLimit = Math.min(
-      verifiedIds.length,
-      getPositiveIntegerEnv("ROBLOX_MM2_PRESENCE_SCAN_LIMIT", 650),
-    );
+    const startedAt = Date.now();
+    const orderedIds = [];
     const start = mm2PresenceCursor % verifiedIds.length;
-    const scanIds = [];
-    for (let offset = 0; offset < scanLimit; offset += 1) {
-      scanIds.push(verifiedIds[(start + offset) % verifiedIds.length]);
+    for (let offset = 0; offset < verifiedIds.length; offset += 1) {
+      orderedIds.push(verifiedIds[(start + offset) % verifiedIds.length]);
     }
 
-    const startedAt = Date.now();
-    const usingDirectFallback = Date.now() < presenceApiBackoffUntil;
-    const presenceScan = await getPresenceBatched(scanIds, {
-      maxAttempts: 1,
-      interBatchDelayMs: 900,
-      stopOnRateLimit: true,
-      presenceFetcher: usingDirectFallback
-        ? getUsersPresenceFallback
-        : getUsersPresence,
-      fallbackFetcher: usingDirectFallback
-        ? null
-        : getUsersPresenceFallback,
-      fallbackOnRateLimit: !usingDirectFallback,
-    });
+    const mm2PresenceByUserId = new Map();
+    let totalChecked = 0;
+    let totalInGameSeen = 0;
+    let presenceRateLimited = false;
+    let presenceFallbackUsed = false;
+    let throttlePauses = 0;
 
-    const checkedCount = presenceScan.checkedIds.length;
+    for (
+      let offset = 0;
+      offset < orderedIds.length &&
+      Date.now() - startedAt < MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS &&
+      mm2PresenceByUserId.size < requestedLimit;
+      offset += MM2_ACTIVITY_SWEEP_CHUNK_SIZE
+    ) {
+      const chunk = orderedIds.slice(
+        offset,
+        offset + MM2_ACTIVITY_SWEEP_CHUNK_SIZE,
+      );
+      const usingDirectFallback = Date.now() < presenceApiBackoffUntil;
+
+      const presenceScan = await getPresenceBatched(chunk, {
+        maxAttempts: 1,
+        interBatchDelayMs: 1_100,
+        stopOnRateLimit: true,
+        presenceFetcher: usingDirectFallback
+          ? getUsersPresenceFallback
+          : getUsersPresence,
+        fallbackFetcher: usingDirectFallback
+          ? null
+          : getUsersPresenceFallback,
+        fallbackOnRateLimit: !usingDirectFallback,
+      });
+
+      totalChecked += presenceScan.checkedIds.length;
+      presenceRateLimited =
+        presenceRateLimited || presenceScan.rateLimited === true;
+      presenceFallbackUsed =
+        presenceFallbackUsed ||
+        usingDirectFallback ||
+        presenceScan.usedFallback === true;
+
+      const inGamePresences = presenceScan.presences.filter(
+        (presence) => Number(presence?.userPresenceType) === 2,
+      );
+      totalInGameSeen += inGamePresences.length;
+
+      for (const presence of inGamePresences) {
+        if (isPresenceForGame(presence, game)) {
+          mm2PresenceByUserId.set(Number(presence.userId), presence);
+        }
+      }
+
+      const incompleteChunk =
+        presenceScan.checkedIds.length < chunk.length;
+
+      if (
+        incompleteChunk &&
+        presenceScan.rateLimited &&
+        Date.now() - startedAt + MM2_ACTIVITY_THROTTLE_PAUSE_MS <
+          MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS
+      ) {
+        throttlePauses += 1;
+        await sleep(MM2_ACTIVITY_THROTTLE_PAUSE_MS);
+      }
+
+      if (incompleteChunk) {
+        // Advance only through IDs actually resolved; the next command resumes
+        // from the first unresolved region instead of pretending coverage.
+        break;
+      }
+    }
+
     mm2PresenceCursor =
-      (start + Math.max(checkedCount, PRESENCE_BATCH_SIZE)) %
+      (start + Math.max(totalChecked, PRESENCE_BATCH_SIZE)) %
       verifiedIds.length;
 
-    const mm2Presences = presenceScan.presences.filter((presence) =>
-      isPresenceForGame(presence, game),
-    );
-
+    const mm2Presences = [...mm2PresenceByUserId.values()];
     const players = (
       await mapWithConcurrency(
         mm2Presences.slice(0, requestedLimit),
@@ -1558,7 +1611,8 @@ export async function scanMm2JoinActivity({
       candidatePoolSize: candidatePool.size,
       candidateSourceCounts: getPoolSourceCounts(),
       verifiedRapIndexCount: verifiedIds.length,
-      presenceScannedCount: checkedCount,
+      presenceScannedCount: totalChecked,
+      totalInGameSeen,
       gameActiveCount: mm2Presences.length,
       verificationAttempts: players.length,
       valueUnavailableCount: 0,
@@ -1568,11 +1622,14 @@ export async function scanMm2JoinActivity({
       verifiedCount: players.length,
       scanElapsedMs: Date.now() - startedAt,
       liveCacheHit: false,
-      presenceRateLimited: presenceScan.rateLimited === true,
-      presenceFallbackUsed:
-        usingDirectFallback || presenceScan.usedFallback === true,
+      presenceRateLimited,
+      presenceFallbackUsed,
       scanCursorStart: start,
       scanCursorNext: mm2PresenceCursor,
+      scanComplete:
+        totalChecked >= verifiedIds.length ||
+        mm2PresenceByUserId.size >= requestedLimit,
+      throttlePauses,
       sources: [
         "Verified RAP index",
         "Roblox public live presence",
@@ -1928,7 +1985,10 @@ async function refreshGeneralCandidatePool() {
   // Rolimon's is used only to choose high-value seed item IDs; ownership itself
   // is verified against Roblox's public asset-owner endpoint.
   let limitedOwnerUserIds = [];
-  if (now - lastLimitedOwnerRefreshAt >= LIMITED_OWNER_REFRESH_INTERVAL_MS) {
+  if (
+    now >= presenceApiBackoffUntil &&
+    now - lastLimitedOwnerRefreshAt >= LIMITED_OWNER_REFRESH_INTERVAL_MS
+  ) {
     limitedOwnerUserIds = await refreshLimitedOwnerCandidates(
       tradeAdsResult?.itemIds ?? [],
     );
@@ -1958,9 +2018,18 @@ async function refreshGeneralCandidatePool() {
     marketplaceOwners: 0,
     marketplaceGroupMembers: 0,
   };
-  if (now - lastMarketplaceRefreshAt >= MARKETPLACE_REFRESH_INTERVAL_MS) {
+  if (
+    now >= presenceApiBackoffUntil &&
+    now - lastMarketplaceRefreshAt >= MARKETPLACE_REFRESH_INTERVAL_MS
+  ) {
     marketplaceStats = await refreshMarketplaceCandidateSources().catch(
       (error) => {
+        if (Number(error?.status) === 429) {
+          presenceApiBackoffUntil = Math.max(
+            presenceApiBackoffUntil,
+            Date.now() + DEFAULT_PRESENCE_API_BACKOFF_MS,
+          );
+        }
         console.warn("Roblox Marketplace discovery failed:", error);
         return marketplaceStats;
       },
@@ -2807,6 +2876,12 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
           });
           return result.owners;
         } catch (error) {
+          if (Number(error?.status) === 429) {
+            presenceApiBackoffUntil = Math.max(
+              presenceApiBackoffUntil,
+              Date.now() + DEFAULT_PRESENCE_API_BACKOFF_MS,
+            );
+          }
           console.warn(
             `Limited-owner discovery failed for ${item.name} (${item.id}):`,
             error,
