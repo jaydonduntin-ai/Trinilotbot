@@ -132,6 +132,8 @@ const MM2_SCAN_TIME_BUDGET_MS = 30_000;
 const MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS = 28_000;
 const MM2_ACTIVITY_SWEEP_CHUNK_SIZE = 250;
 const MM2_ACTIVITY_THROTTLE_PAUSE_MS = 3_000;
+const MM2_VALUE_DISCOVERY_BATCH_SIZE = 15;
+const MM2_VALUE_INDEX_TTL_MS = 30 * 60 * 1000;
 
 const SEARCH_TERMS = [
   "pro","king","queen","dark","shadow","cool","game","player","star","wolf",
@@ -178,6 +180,7 @@ let limitedSeedCursor = 0;
 let candidateRefreshPromise = null;
 let lastCandidatePoolRefreshAt = 0;
 let mm2PresenceCursor = 0;
+let mm2ValueDiscoveryCursor = 0;
 let activeInteractivePresenceScans = 0;
 let presenceBatchQueue = Promise.resolve();
 
@@ -1481,11 +1484,29 @@ export async function scanMm2JoinActivity({
           presenceFallbackUsed: false,
           scanComplete: false,
           throttlePauses: 0,
+          mm2ProfilesCheckedThisPass: 0,
+          mm2ProfilesAvailableThisPass: 0,
+          mm2ProfilesUnavailableThisPass: 0,
+          mm2ValueIndexQualifiedCount:
+            getIndexedMm2ValueCandidateIds({
+              minimumMm2Value: mm2ValueFloor,
+              minimumRap,
+            }).length,
+          mm2ValueIndexKnownCount: getKnownMm2ValueCandidateCount(),
         });
       }
     }
 
-    const candidateIds = getMm2CandidateIds(minimumRap);
+    const mm2IndexRefresh = await refreshMm2ValueIndex({
+      minimumMm2Value: mm2ValueFloor,
+      minimumRap,
+    });
+
+    const candidateIds = getIndexedMm2ValueCandidateIds({
+      minimumMm2Value: mm2ValueFloor,
+      minimumRap,
+    });
+
     if (candidateIds.length === 0) {
       return buildMm2ValueScanResult({
         game,
@@ -1497,12 +1518,17 @@ export async function scanMm2JoinActivity({
         totalInGameSeen: 0,
         mm2Presences: [],
         valueChecks: [],
-        scanElapsedMs: 0,
+        scanElapsedMs: mm2IndexRefresh.elapsedMs,
         liveCacheHit: false,
         presenceRateLimited: false,
         presenceFallbackUsed: false,
-        scanComplete: true,
+        scanComplete: false,
         throttlePauses: 0,
+        mm2ProfilesCheckedThisPass: mm2IndexRefresh.checked,
+        mm2ProfilesAvailableThisPass: mm2IndexRefresh.available,
+        mm2ProfilesUnavailableThisPass: mm2IndexRefresh.unavailable,
+        mm2ValueIndexQualifiedCount: 0,
+        mm2ValueIndexKnownCount: mm2IndexRefresh.knownCount,
       });
     }
 
@@ -1659,6 +1685,11 @@ export async function scanMm2JoinActivity({
       throttlePauses,
       scanCursorStart: scanStart,
       scanCursorNext: mm2PresenceCursor,
+      mm2ProfilesCheckedThisPass: mm2IndexRefresh.checked,
+      mm2ProfilesAvailableThisPass: mm2IndexRefresh.available,
+      mm2ProfilesUnavailableThisPass: mm2IndexRefresh.unavailable,
+      mm2ValueIndexQualifiedCount: candidateIds.length,
+      mm2ValueIndexKnownCount: mm2IndexRefresh.knownCount,
     });
   } finally {
     activeInteractivePresenceScans = Math.max(
@@ -1666,6 +1697,216 @@ export async function scanMm2JoinActivity({
       activeInteractivePresenceScans - 1,
     );
   }
+}
+
+async function refreshMm2ValueIndex({
+  minimumMm2Value,
+  minimumRap = null,
+} = {}) {
+  const startedAt = Date.now();
+  const allCandidates = getMm2CandidateIds(minimumRap);
+  if (allCandidates.length === 0) {
+    return {
+      checked: 0,
+      available: 0,
+      unavailable: 0,
+      knownCount: getKnownMm2ValueCandidateCount(),
+      elapsedMs: 0,
+    };
+  }
+
+  const now = Date.now();
+  const staleOrUnknown = allCandidates.filter((userId) => {
+    const candidate = candidatePool.get(Number(userId));
+    const checkedAt = Number(candidate?.lastKnownMm2ValueAt ?? 0);
+    return !checkedAt || now - checkedAt >= MM2_VALUE_INDEX_TTL_MS;
+  });
+
+  if (staleOrUnknown.length === 0) {
+    return {
+      checked: 0,
+      available: 0,
+      unavailable: 0,
+      knownCount: getKnownMm2ValueCandidateCount(),
+      elapsedMs: 0,
+    };
+  }
+
+  const ordered = staleOrUnknown
+    .map((userId) => candidatePool.get(Number(userId)))
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftSources = [...(left.sources ?? [])].join(" ").toLowerCase();
+      const rightSources = [...(right.sources ?? [])].join(" ").toLowerCase();
+      const leftMm2Signal =
+        leftSources.includes("mm2") ||
+        leftSources.includes("murder mystery")
+          ? 1
+          : 0;
+      const rightMm2Signal =
+        rightSources.includes("mm2") ||
+        rightSources.includes("murder mystery")
+          ? 1
+          : 0;
+
+      if (leftMm2Signal !== rightMm2Signal) {
+        return rightMm2Signal - leftMm2Signal;
+      }
+
+      return (
+        getCandidatePriority(
+          right,
+          { minimumValue: null, minimumRap },
+        ) -
+        getCandidatePriority(
+          left,
+          { minimumValue: null, minimumRap },
+        )
+      );
+    })
+    .map((candidate) => Number(candidate.userId));
+
+  const start = mm2ValueDiscoveryCursor % ordered.length;
+  const batch = [];
+  const batchSize = Math.min(
+    MM2_VALUE_DISCOVERY_BATCH_SIZE,
+    ordered.length,
+  );
+
+  for (let offset = 0; offset < batchSize; offset += 1) {
+    batch.push(ordered[(start + offset) % ordered.length]);
+  }
+
+  mm2ValueDiscoveryCursor =
+    (start + Math.max(batch.length, 1)) % ordered.length;
+
+  const results = await mapWithConcurrency(
+    batch,
+    MM2_PROFILE_CONCURRENCY,
+    async (userId) => {
+      const candidate = candidatePool.get(Number(userId));
+      if (!candidate) {
+        return { userId, available: false };
+      }
+
+      try {
+        const profile = await getRblxValueProfile({
+          userId,
+          requestTimeoutMs: 3_500,
+          maxRetries: 0,
+        });
+
+        candidate.lastKnownMm2ValueAt = Date.now();
+
+        if (
+          profile?.status !== "verified" ||
+          !Number.isFinite(Number(profile?.totalValue))
+        ) {
+          candidate.lastKnownMm2Value = null;
+          candidate.lastKnownMm2ItemCount = null;
+          candidate.lastKnownMm2ValueSource =
+            profile?.source ?? "RBLXValue API v2 profile";
+          return { userId, available: false };
+        }
+
+        candidate.lastKnownMm2Value = Number(profile.totalValue);
+        candidate.lastKnownMm2ItemCount =
+          Number.isFinite(Number(profile?.itemCount))
+            ? Number(profile.itemCount)
+            : null;
+        candidate.lastKnownMm2ValueSource =
+          profile?.source ?? "RBLXValue API v2 profile";
+
+        return {
+          userId,
+          available: true,
+          qualifies:
+            Number(profile.totalValue) >= Number(minimumMm2Value),
+        };
+      } catch (error) {
+        candidate.lastKnownMm2ValueAt = Date.now();
+        candidate.lastKnownMm2Value = null;
+        candidate.lastKnownMm2ItemCount = null;
+        candidate.lastKnownMm2ValueSource =
+          "RBLXValue API v2 profile";
+        console.warn(
+          `MM2 value index lookup failed for Roblox user ${userId}:`,
+          error,
+        );
+        return { userId, available: false };
+      }
+    },
+  );
+
+  return {
+    checked: results.length,
+    available: results.filter((result) => result?.available).length,
+    unavailable: results.filter((result) => !result?.available).length,
+    qualified: results.filter((result) => result?.qualifies).length,
+    knownCount: getKnownMm2ValueCandidateCount(),
+    elapsedMs: Date.now() - startedAt,
+  };
+}
+
+function getIndexedMm2ValueCandidateIds({
+  minimumMm2Value,
+  minimumRap = null,
+} = {}) {
+  const now = Date.now();
+
+  return [...candidatePool.values()]
+    .filter((candidate) => {
+      if (
+        minimumRap !== null &&
+        minimumRap !== undefined &&
+        (!Number.isFinite(Number(candidate?.lastKnownRap)) ||
+          Number(candidate.lastKnownRap) < Number(minimumRap))
+      ) {
+        return false;
+      }
+
+      if (
+        !Number.isFinite(Number(candidate?.lastKnownMm2Value)) ||
+        Number(candidate.lastKnownMm2Value) <
+          Number(minimumMm2Value)
+      ) {
+        return false;
+      }
+
+      const checkedAt = Number(candidate?.lastKnownMm2ValueAt ?? 0);
+      return checkedAt > 0 && now - checkedAt < MM2_VALUE_INDEX_TTL_MS;
+    })
+    .sort((left, right) => {
+      const valueDelta =
+        Number(right.lastKnownMm2Value ?? 0) -
+        Number(left.lastKnownMm2Value ?? 0);
+      if (valueDelta !== 0) return valueDelta;
+
+      return (
+        getCandidatePriority(
+          right,
+          { minimumValue: null, minimumRap },
+        ) -
+        getCandidatePriority(
+          left,
+          { minimumValue: null, minimumRap },
+        )
+      );
+    })
+    .map((candidate) => Number(candidate.userId));
+}
+
+function getKnownMm2ValueCandidateCount() {
+  const now = Date.now();
+
+  return [...candidatePool.values()].filter((candidate) => {
+    const checkedAt = Number(candidate?.lastKnownMm2ValueAt ?? 0);
+    return (
+      checkedAt > 0 &&
+      now - checkedAt < MM2_VALUE_INDEX_TTL_MS &&
+      Number.isFinite(Number(candidate?.lastKnownMm2Value))
+    );
+  }).length;
 }
 
 function getMm2CandidateIds(minimumRap = null) {
@@ -1718,15 +1959,32 @@ async function buildMm2ValueTarget(
     };
   }
 
+  const hasFreshIndexedMm2Value =
+    Number.isFinite(Number(candidate?.lastKnownMm2Value)) &&
+    Number(candidate?.lastKnownMm2ValueAt ?? 0) > 0 &&
+    Date.now() - Number(candidate.lastKnownMm2ValueAt) <
+      MM2_VALUE_INDEX_TTL_MS;
+
   const [userResult, avatarResult, mm2ProfileResult] =
     await Promise.allSettled([
       getRobloxUserById(userId),
       getAvatarThumbnail(userId),
-      getRblxValueProfile({
-        userId,
-        requestTimeoutMs: 3_500,
-        maxRetries: 0,
-      }),
+      hasFreshIndexedMm2Value
+        ? Promise.resolve({
+            status: "verified",
+            totalValue: Number(candidate.lastKnownMm2Value),
+            itemCount:
+              candidate.lastKnownMm2ItemCount ?? null,
+            source:
+              candidate.lastKnownMm2ValueSource ??
+              "RBLXValue API v2 profile",
+            sourceUrl: "https://rblxvalue.com",
+          })
+        : getRblxValueProfile({
+            userId,
+            requestTimeoutMs: 3_500,
+            maxRetries: 0,
+          }),
     ]);
 
   const mm2Profile =
@@ -1734,6 +1992,21 @@ async function buildMm2ValueTarget(
       ? mm2ProfileResult.value
       : null;
   const mm2Value = Number(mm2Profile?.totalValue);
+
+  if (
+    candidate &&
+    mm2Profile?.status === "verified" &&
+    Number.isFinite(mm2Value)
+  ) {
+    candidate.lastKnownMm2Value = mm2Value;
+    candidate.lastKnownMm2ValueAt = Date.now();
+    candidate.lastKnownMm2ItemCount =
+      Number.isFinite(Number(mm2Profile?.itemCount))
+        ? Number(mm2Profile.itemCount)
+        : null;
+    candidate.lastKnownMm2ValueSource =
+      mm2Profile?.source ?? "RBLXValue API v2 profile";
+  }
 
   if (
     mm2Profile?.status !== "verified" ||
@@ -1813,6 +2086,11 @@ function buildMm2ValueScanResult({
   throttlePauses,
   scanCursorStart = null,
   scanCursorNext = null,
+  mm2ProfilesCheckedThisPass = 0,
+  mm2ProfilesAvailableThisPass = 0,
+  mm2ProfilesUnavailableThisPass = 0,
+  mm2ValueIndexQualifiedCount = 0,
+  mm2ValueIndexKnownCount = 0,
 }) {
   const checks = Array.isArray(valueChecks) ? valueChecks : [];
 
@@ -1830,6 +2108,11 @@ function buildMm2ValueScanResult({
     totalInGameSeen,
     gameActiveCount: mm2Presences.length,
     mm2ValueChecksAttempted: checks.length,
+    mm2ProfilesCheckedThisPass,
+    mm2ProfilesAvailableThisPass,
+    mm2ProfilesUnavailableThisPass,
+    mm2ValueIndexQualifiedCount,
+    mm2ValueIndexKnownCount,
     mm2ValueUnavailableCount: checks.filter(
       (player) => player?.reason === "mm2-value-unavailable",
     ).length,
