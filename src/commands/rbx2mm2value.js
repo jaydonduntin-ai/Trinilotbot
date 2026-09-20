@@ -7,13 +7,13 @@ import {
 } from "../monitoring/target-scanner.js";
 import { subscribeMm2ValueChannel } from "../storage/mm2-value-watchlist.js";
 
-const MIN_MM2_VALUE = 100_000;
+const MIN_MM2_VALUE = 50_000;
 
 export const rbx2mm2ValueCommand = {
   definition: new SlashCommandBuilder()
     .setName("rbx2mm2value")
     .setDescription(
-      "Find current MM2 players with at least 100K verified MM2 inventory value.",
+      "Find current MM2 players with at least 50K verified MM2 inventory value.",
     )
     .addIntegerOption((option) =>
       option
