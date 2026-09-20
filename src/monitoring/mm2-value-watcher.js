@@ -9,7 +9,7 @@ import { getFollowUserJoinUrl } from "../roblox/game-session.js";
 import {
   getMm2ValueWatchChannels,
   getMm2ValueWatchlist,
-  updateMm2ValuePresence,
+  updateMm2ValuePresences,
 } from "../storage/mm2-value-watchlist.js";
 
 const DEFAULT_MM2_VALUE_WATCH_INTERVAL_MS = 2 * 60 * 1000;
@@ -47,8 +47,6 @@ async function runMm2ValueWatchCycle(client) {
   if (entries.length === 0) return;
 
   const ids = entries.map((entry) => Number(entry.userId));
-  const usingFallback = false;
-
   const presenceScan = await getPresenceBatched(ids, {
     batchSize: PRESENCE_BATCH_SIZE,
     maxAttempts: 1,
@@ -57,6 +55,7 @@ async function runMm2ValueWatchCycle(client) {
     presenceFetcher: getUsersPresence,
     fallbackFetcher: getUsersPresenceFallback,
     fallbackOnRateLimit: true,
+    priority: "background",
   });
 
   const presenceById = new Map(
@@ -65,6 +64,8 @@ async function runMm2ValueWatchCycle(client) {
       presence,
     ]),
   );
+
+  const updates = [];
 
   for (const entry of entries) {
     const presence = presenceById.get(Number(entry.userId));
@@ -87,11 +88,15 @@ async function runMm2ValueWatchCycle(client) {
       });
     }
 
-    await updateMm2ValuePresence(entry.userId, presence, {
+    updates.push({
+      userId: entry.userId,
+      presence,
       inMm2,
       alerted: enteredMm2,
     });
   }
+
+  await updateMm2ValuePresences(updates);
 }
 
 async function publishMm2ValueAlert(client, entry, presence) {
