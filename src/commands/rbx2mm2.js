@@ -109,7 +109,7 @@ function buildEmbeds(result) {
 
     const join =
       player.followJoinUrl
-        ? `[Join MM2 player](<${player.followJoinUrl}>)`
+        ? `[Direct join MM2 player](<${player.followJoinUrl}>)`
         : "Join unavailable";
 
     const embed = new EmbedBuilder()
