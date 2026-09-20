@@ -45,7 +45,8 @@ import {
 
 export const DEFAULT_TARGET_RAP = 450_000;
 export const DEFAULT_TARGET_VALUE = 150_000;
-export const DEFAULT_MM2_VALUE = 150_000;
+export const DEFAULT_MM2_VALUE = 100_000;
+export const DEFAULT_MM2_RAP = 150_000;
 export const DEFAULT_TARGET_COUNT = 10;
 export const MAX_TARGETS = 10;
 export const MIN_TARGET_THRESHOLD = 450_000;
@@ -1389,6 +1390,19 @@ async function revalidatePlayersForGame(players, game) {
         presenceFreshness: "fresh",
       };
     });
+}
+
+export async function scanMm2RapActivity({
+  minimumRap = DEFAULT_MM2_RAP,
+  limit = DEFAULT_TARGET_COUNT,
+} = {}) {
+  return scanGameTargets({
+    gameKey: "mm2",
+    minimumValue: null,
+    minimumRap,
+    limit,
+    includeGameValue: false,
+  });
 }
 
 export async function scanMm2JoinActivity({
