@@ -854,27 +854,27 @@ async function scanDiscoveredTargetsInternal({
     if (verificationAttempts >= maxActiveToVerify) break;
 
     const wave = discovery.userIds.slice(offset, offset + waveSize);
-    const usingDirectFallback =
-      Date.now() < presenceApiBackoffUntil;
+    const route = getInteractivePresenceRoute();
+
+    if (!route) {
+      presenceRateLimited = true;
+      break;
+    }
 
     const presenceScan = await getPresenceBatched(wave, {
       maxAttempts: 1,
       interBatchDelayMs: 1_000,
       stopOnRateLimit: true,
-      presenceFetcher: usingDirectFallback
-        ? getUsersPresenceFallback
-        : getUsersPresence,
-      fallbackFetcher: usingDirectFallback
-        ? null
-        : getUsersPresenceFallback,
-      fallbackOnRateLimit: !usingDirectFallback,
+      presenceFetcher: route.presenceFetcher,
+      fallbackFetcher: route.fallbackFetcher,
+      fallbackOnRateLimit: route.fallbackOnRateLimit,
     });
     markCandidatesChecked(presenceScan.checkedIds);
     presenceScannedCount += presenceScan.checkedIds.length;
     if (presenceScan.rateLimited) presenceRateLimited = true;
     presenceFallbackUsed =
       presenceFallbackUsed ||
-      usingDirectFallback ||
+      (route.usingFallback && presenceScan.checkedIds.length > 0) ||
       presenceScan.usedFallback === true;
 
     const inGamePresences = presenceScan.presences
@@ -905,7 +905,7 @@ async function scanDiscoveredTargetsInternal({
     if (
       presenceScan.rateLimited &&
       !presenceScan.usedFallback &&
-      !usingDirectFallback &&
+      !route.usingFallback &&
       inGamePresences.length === 0
     ) {
       continue;
@@ -1673,7 +1673,7 @@ export async function scanMm2JoinActivity({
         presenceRateLimited || presenceScan.rateLimited === true;
       presenceFallbackUsed =
         presenceFallbackUsed ||
-        usingDirectFallback ||
+        (route.usingFallback && presenceScan.checkedIds.length > 0) ||
         presenceScan.usedFallback === true;
 
       const inGamePresences = presenceScan.presences.filter(
@@ -2482,20 +2482,20 @@ export async function scanGameTargets({
         offset,
         offset + DEFAULT_GAME_SCAN_WAVE_SIZE,
       );
-      const usingDirectFallback =
-        Date.now() < presenceApiBackoffUntil;
+      const route = getInteractivePresenceRoute();
+
+      if (!route) {
+        presenceRateLimited = true;
+        break;
+      }
 
       const presenceScan = await getPresenceBatched(wave, {
         maxAttempts: 1,
         interBatchDelayMs: 1_000,
         stopOnRateLimit: true,
-        presenceFetcher: usingDirectFallback
-          ? getUsersPresenceFallback
-          : getUsersPresence,
-        fallbackFetcher: usingDirectFallback
-          ? null
-          : getUsersPresenceFallback,
-        fallbackOnRateLimit: !usingDirectFallback,
+        presenceFetcher: route.presenceFetcher,
+        fallbackFetcher: route.fallbackFetcher,
+        fallbackOnRateLimit: route.fallbackOnRateLimit,
       });
 
       presenceScannedCount += presenceScan.checkedIds.length;
@@ -2577,7 +2577,7 @@ export async function scanGameTargets({
         offset += presenceScan.checkedIds.length;
       } else if (
         presenceScan.rateLimited &&
-        !usingDirectFallback &&
+        !route.usingFallback &&
         Date.now() - startedAt < DEFAULT_GAME_SCAN_TIME_BUDGET_MS
       ) {
         // Roblox just entered shared backoff. Retry the same slice through
@@ -4098,6 +4098,33 @@ function getTopLimiteds(inventory) {
     }));
 }
 
+function getInteractivePresenceRoute() {
+  const now = Date.now();
+  const officialBackingOff = now < presenceApiBackoffUntil;
+  const fallbackBackingOff = now < fallbackPresenceBackoffUntil;
+
+  if (officialBackingOff && fallbackBackingOff) {
+    return null;
+  }
+
+  const usingFallback = officialBackingOff && !fallbackBackingOff;
+
+  return {
+    usingFallback,
+    officialBackingOff,
+    fallbackBackingOff,
+    presenceFetcher: usingFallback
+      ? getUsersPresenceFallback
+      : getUsersPresence,
+    fallbackFetcher:
+      !usingFallback && !fallbackBackingOff
+        ? getUsersPresenceFallback
+        : null,
+    fallbackOnRateLimit:
+      !usingFallback && !fallbackBackingOff,
+  };
+}
+
 async function revalidateCurrentlyInGame(players) {
   if (!Array.isArray(players) || players.length === 0) {
     return {
@@ -4112,21 +4139,25 @@ async function revalidateCurrentlyInGame(players) {
     .map((player) => Number(player?.id))
     .filter((userId) => Number.isInteger(userId) && userId > 0);
 
-  const usingDirectFallback =
-    Date.now() < presenceApiBackoffUntil;
+  const route = getInteractivePresenceRoute();
+  if (!route) {
+    return {
+      players: [],
+      leftGameCount: 0,
+      unavailableCount: userIds.length,
+      rateLimited: true,
+      usedFallback: false,
+    };
+  }
 
   const check = await getPresenceBatched(userIds, {
     batchSize: FINAL_RECHECK_BATCH_SIZE,
     maxAttempts: 1,
     interBatchDelayMs: 500,
     stopOnRateLimit: true,
-    presenceFetcher: usingDirectFallback
-      ? getUsersPresenceFallback
-      : getUsersPresence,
-    fallbackFetcher: usingDirectFallback
-      ? null
-      : getUsersPresenceFallback,
-    fallbackOnRateLimit: !usingDirectFallback,
+    presenceFetcher: route.presenceFetcher,
+    fallbackFetcher: route.fallbackFetcher,
+    fallbackOnRateLimit: route.fallbackOnRateLimit,
   });
 
   const presenceByUserId = new Map(
@@ -4180,7 +4211,8 @@ async function revalidateCurrentlyInGame(players) {
     ).length,
     rateLimited: check.rateLimited === true,
     usedFallback:
-      usingDirectFallback || check.usedFallback === true,
+      (route.usingFallback && check.checkedIds.length > 0) ||
+      check.usedFallback === true,
   };
 }
 
@@ -4504,7 +4536,12 @@ async function getPresenceBatchedUnlocked(
     // If the official Roblox presence route omitted an ID even after retries,
     // use a separate public Roblox API proxy as a final fresh signal. We still
     // require an explicit InGame presence before returning a target.
-    if (!rateLimited && fallbackFetcher && pending.size > 0) {
+    if (
+      !rateLimited &&
+      fallbackFetcher &&
+      pending.size > 0 &&
+      Date.now() >= fallbackPresenceBackoffUntil
+    ) {
       try {
         const fallbackResult = await fallbackFetcher([...pending]);
         for (const presence of Array.isArray(fallbackResult) ? fallbackResult : []) {
