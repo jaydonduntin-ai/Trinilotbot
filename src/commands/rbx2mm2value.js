@@ -5,6 +5,7 @@ import {
   MAX_TARGETS,
   scanMm2JoinActivity,
 } from "../monitoring/target-scanner.js";
+import { subscribeMm2ValueChannel } from "../storage/mm2-value-watchlist.js";
 
 const MIN_MM2_VALUE = 100_000;
 
@@ -39,6 +40,9 @@ export const rbx2mm2ValueCommand = {
       interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
     await interaction.deferReply({ ephemeral: true });
+    await subscribeMm2ValueChannel(interaction.channelId).catch((error) => {
+      console.warn("Could not subscribe MM2 value alert channel:", error);
+    });
     await interaction.editReply(
       `Building the ${minimumMm2Value.toLocaleString()}+ MM2 value index, then checking who is live in MM2…`,
     );
@@ -101,6 +105,7 @@ function buildEmbeds(result) {
         `MM2 value threshold: ${Number(result.minimumMm2Value ?? DEFAULT_MM2_VALUE).toLocaleString()}+`,
         "Roblox RAP prefilter: off",
         `Mode: ${result.liveCacheHit ? "live cache" : result.presenceFallbackUsed ? "public presence fallback" : result.presenceRateLimited ? "rate-limited" : "fresh presence"}`,
+        "Background MM2 watch: enabled for this channel",
         `Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
       ].join("\n"),
     )
