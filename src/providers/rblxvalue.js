@@ -42,7 +42,7 @@ export async function getRblxValueProfile({
   maxRetries = MAX_RETRIES,
 }) {
   const apiKey = process.env.ROBLOX_RBLXVALUE_API_KEY?.trim();
-  const lookup = String(userId ?? username ?? "").trim();
+  const lookup = String(username ?? userId ?? "").trim();
   if (!apiKey || !lookup) return null;
 
   const cacheKey =
