@@ -9,6 +9,8 @@ test("all slash commands are registered", () => {
     "roblox",
     "limitedowners",
     "rbx2dc",
+    "rbx2mm2",
+    "rbx2mm2value",
     "dc2rb",
     "alerts",
     "target",
