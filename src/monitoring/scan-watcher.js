@@ -1,6 +1,6 @@
 import { EmbedBuilder } from "discord.js";
 import { getPresenceBatched } from "./target-scanner.js";
-import { getRobloxProfile } from "../roblox/profile.js";
+import { getFollowUserJoinUrl } from "../roblox/game-session.js";
 import {
   getScanWatchlist,
   updateScanPresence,
@@ -55,7 +55,7 @@ async function checkScanWatchlist(client) {
     const enteredGame = previousType !== null && previousType !== 2 && currentType === 2;
 
     if (enteredGame) {
-      await publishScanAlert(client, entry).catch((error) => {
+      await publishScanAlert(client, entry, presence).catch((error) => {
         console.warn(
           `Could not publish scan alert for Roblox user ${entry.userId}:`,
           error,
@@ -69,41 +69,33 @@ async function checkScanWatchlist(client) {
   }
 }
 
-async function publishScanAlert(client, entry) {
-  const profile = await getRobloxProfile(
-    String(entry.userId),
-  ).catch(() => null);
-
+async function publishScanAlert(client, entry, presence) {
   const profileUrl =
-    profile?.profileUrl ??
     `https://www.roblox.com/users/${entry.userId}/profile`;
-  const rap =
-    typeof profile?.inventory?.totalRAP === "number"
-      ? profile.inventory.totalRAP
-      : typeof profile?.rolimonsTotals?.rap === "number"
-        ? profile.rolimonsTotals.rap
-        : entry.rapValue;
+  const followJoinUrl = getFollowUserJoinUrl(entry.userId);
+  const name =
+    entry.displayName && entry.username
+      ? `${entry.displayName} (@${entry.username})`
+      : entry.username
+        ? `@${entry.username}`
+        : `Roblox user ${entry.userId}`;
 
   const embed = new EmbedBuilder()
     .setColor(0x57f287)
-    .setTitle(
-      profile
-        ? `${profile.displayName} (@${profile.username}) is now in game`
-        : `Roblox user ${entry.userId} is now in game`,
-    )
+    .setTitle(`${name} is now in game`)
     .setURL(profileUrl)
     .addFields(
       {
         name: "RAP",
         value:
-          typeof rap === "number"
-            ? `${rap.toLocaleString()} RAP`
+          typeof entry.rapValue === "number"
+            ? `${entry.rapValue.toLocaleString()} RAP`
             : "Unavailable",
         inline: true,
       },
       {
         name: "Current game",
-        value: profile?.currentGame?.name ?? "In game",
+        value: presence?.lastLocation ?? "In game",
         inline: true,
       },
       {
@@ -113,13 +105,9 @@ async function publishScanAlert(client, entry) {
       },
       {
         name: "Direct join",
-        value: profile?.currentGame?.followJoinUrl
-          ? `[Join player](${profile.currentGame.followJoinUrl})`
-          : profile?.currentGame?.joinUrl
-            ? `[Try exact server](${profile.currentGame.joinUrl})`
-            : profile?.currentGame?.gameUrl
-              ? `[Open game](${profile.currentGame.gameUrl})`
-              : "Unavailable",
+        value: followJoinUrl
+          ? `[Join player](${followJoinUrl})`
+          : "Unavailable",
         inline: false,
       },
     )
@@ -127,8 +115,6 @@ async function publishScanAlert(client, entry) {
       text: "Triggered by /scan watchlist · public Roblox presence",
     })
     .setTimestamp();
-
-  if (profile?.avatarUrl) embed.setThumbnail(profile.avatarUrl);
 
   for (const channelId of entry.channels ?? []) {
     const channel = await client.channels.fetch(channelId).catch(() => null);
