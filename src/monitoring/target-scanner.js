@@ -757,6 +757,7 @@ export async function scanDiscoveredTargets({
           buildDiscoveredTargetPlayer(presence, {
             minimumValue,
             minimumRap,
+            includeGameValue,
           }).catch((error) => {
             console.warn(
               `Target verification failed for Roblox user ${presence.userId}:`,
@@ -1282,6 +1283,7 @@ export async function scanMm2JoinActivity({
     minimumValue: null,
     minimumRap,
     limit,
+    includeGameValue: false,
   });
 }
 
@@ -1290,6 +1292,7 @@ export async function scanGameTargets({
   minimumValue = null,
   minimumRap = getMinimumTargetRap(),
   limit = DEFAULT_TARGET_COUNT,
+  includeGameValue = true,
 } = {}) {
   const game = GAME_TARGETS[gameKey];
   if (!game) {
@@ -2545,7 +2548,11 @@ function nextSearchTerms(count) {
 
 async function buildDiscoveredTargetPlayer(
   presence,
-  { minimumValue = null, minimumRap = null } = {},
+  {
+    minimumValue = null,
+    minimumRap = null,
+    includeGameValue = true,
+  } = {},
 ) {
   const userId = Number(presence.userId);
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -2743,17 +2750,20 @@ async function buildDiscoveredTargetPlayer(
 
   const joinability = buildTargetJoinability(presence, userId);
 
-  const gameValueResult = await Promise.allSettled([
-    scanGameValue({
-      gameName,
-      userId,
-      username: user.name,
-    }),
-  ]);
-  const gameValue =
-    gameValueResult[0].status === "fulfilled"
-      ? gameValueResult[0].value
-      : null;
+  let gameValue = null;
+  if (includeGameValue) {
+    const gameValueResult = await Promise.allSettled([
+      scanGameValue({
+        gameName,
+        userId,
+        username: user.name,
+      }),
+    ]);
+    gameValue =
+      gameValueResult[0].status === "fulfilled"
+        ? gameValueResult[0].value
+        : null;
+  }
 
   return {
     qualifies: true,
