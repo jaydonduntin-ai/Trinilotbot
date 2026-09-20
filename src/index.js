@@ -30,6 +30,18 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
+const HEAVY_COMMAND_NAMES = new Set([
+  "target",
+  "scan",
+  "rbx2mm2",
+  "rbx2mm2value",
+]);
+const MAX_HEAVY_COMMANDS = readPositiveInteger(
+  process.env.DISCORD_HEAVY_COMMAND_MAX_CONCURRENT,
+  2,
+);
+let activeHeavyCommands = 0;
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.info(`Discord connected as ${readyClient.user.tag}`);
 
@@ -140,7 +152,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    await command.execute(interaction);
+    const isHeavyCommand =
+      HEAVY_COMMAND_NAMES.has(interaction.commandName);
+
+    if (
+      isHeavyCommand &&
+      activeHeavyCommands >= MAX_HEAVY_COMMANDS
+    ) {
+      await interaction.reply({
+        content:
+          "The scanner is busy with other live checks. Try again in a few seconds.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (isHeavyCommand) activeHeavyCommands += 1;
+    try {
+      await command.execute(interaction);
+    } finally {
+      if (isHeavyCommand) {
+        activeHeavyCommands = Math.max(0, activeHeavyCommands - 1);
+      }
+    }
   } catch (error) {
     console.error(`Command /${interaction.commandName} failed:`, error);
     const message =
@@ -231,4 +265,10 @@ try {
     error,
   );
   process.exit(1);
+}
+
+
+function readPositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
