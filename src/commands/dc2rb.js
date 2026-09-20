@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "discord.js";
+import { MessageFlags, SlashCommandBuilder } from "discord.js";
 import { lookupDiscordToRoblox } from "../sources/associations.js";
 
 export const dc2rbCommand = {
@@ -49,7 +49,7 @@ export const dc2rbCommand = {
           ? "**Warning:** Providers returned conflicting Roblox IDs."
           : null,
       ].filter(Boolean).join("\n"),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 };
