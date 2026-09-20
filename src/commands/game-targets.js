@@ -1,4 +1,4 @@
-import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_MM2_VALUE,
   DEFAULT_TARGET_COUNT,
@@ -89,7 +89,7 @@ function createGameTargetCommand({
       const limit =
         interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       try {
         const result =
