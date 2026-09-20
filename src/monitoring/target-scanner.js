@@ -8,6 +8,7 @@ import {
   getRobloxGroupUsers,
   getRobloxGroupWallPosters,
   getRobloxUserById,
+  getRobloxUsersByIds,
   getUserFriends,
   getUserFollowers,
   getUserFollowings,
@@ -1546,6 +1547,10 @@ export async function scanMm2JoinActivity({
         mm2ProfilesCheckedThisPass: mm2IndexRefresh.checked,
         mm2ProfilesAvailableThisPass: mm2IndexRefresh.available,
         mm2ProfilesUnavailableThisPass: mm2IndexRefresh.unavailable,
+        mm2UsernameResolutionUnavailable:
+          mm2IndexRefresh.usernameResolutionUnavailable ?? 0,
+        mm2IndexTransientFailure:
+          mm2IndexRefresh.transientFailure === true,
         mm2ValueIndexQualifiedCount: 0,
         mm2ValueIndexKnownCount: mm2IndexRefresh.knownCount,
       });
@@ -1707,6 +1712,10 @@ export async function scanMm2JoinActivity({
       mm2ProfilesCheckedThisPass: mm2IndexRefresh.checked,
       mm2ProfilesAvailableThisPass: mm2IndexRefresh.available,
       mm2ProfilesUnavailableThisPass: mm2IndexRefresh.unavailable,
+      mm2UsernameResolutionUnavailable:
+        mm2IndexRefresh.usernameResolutionUnavailable ?? 0,
+      mm2IndexTransientFailure:
+        mm2IndexRefresh.transientFailure === true,
       mm2ValueIndexQualifiedCount: candidateIds.length,
       mm2ValueIndexKnownCount: mm2IndexRefresh.knownCount,
     });
@@ -1792,6 +1801,36 @@ async function refreshMm2ValueIndex({
 
   mm2ValueDiscoveryCursor += batch.length;
 
+  let robloxUsers;
+  try {
+    robloxUsers = await getRobloxUsersByIds(batch);
+  } catch (error) {
+    const status = Number(error?.status);
+    console.warn(
+      `MM2 username batch resolution failed${status ? ` (HTTP ${status})` : ""}; leaving candidates eligible for retry.`,
+      error,
+    );
+
+    return {
+      checked: 0,
+      available: 0,
+      unavailable: 0,
+      usernameResolutionUnavailable: batch.length,
+      transientFailure: true,
+      qualified: 0,
+      persisted: 0,
+      watchlistTotal: 0,
+      knownCount: getKnownMm2ValueCandidateCount(),
+      elapsedMs: Date.now() - startedAt,
+    };
+  }
+
+  const robloxUserById = new Map(
+    (robloxUsers ?? [])
+      .map((user) => [Number(user?.id), user])
+      .filter(([userId]) => Number.isInteger(userId) && userId > 0),
+  );
+
   const results = await mapWithConcurrency(
     batch,
     MM2_PROFILE_CONCURRENCY,
@@ -1801,19 +1840,18 @@ async function refreshMm2ValueIndex({
         return { userId, available: false };
       }
 
+      const robloxUser = robloxUserById.get(Number(userId));
+      const username = String(robloxUser?.name ?? "").trim();
+
+      if (!username) {
+        return {
+          userId,
+          available: false,
+          reason: "username-unavailable",
+        };
+      }
+
       try {
-        const robloxUser = await getRobloxUserById(userId);
-        const username = String(robloxUser?.name ?? "").trim();
-
-        if (!username) {
-          candidate.lastKnownMm2ValueAt = Date.now();
-          candidate.lastKnownMm2Value = null;
-          candidate.lastKnownMm2ItemCount = null;
-          candidate.lastKnownMm2ValueSource =
-            "RBLXValue API v2 profile";
-          return { userId, available: false };
-        }
-
         const profile = await getRblxValueProfile({
           username,
           requestTimeoutMs: 3_500,
@@ -1830,7 +1868,11 @@ async function refreshMm2ValueIndex({
           candidate.lastKnownMm2ItemCount = null;
           candidate.lastKnownMm2ValueSource =
             profile?.source ?? "RBLXValue API v2 profile";
-          return { userId, available: false };
+          return {
+            userId,
+            available: false,
+            reason: "mm2-profile-unavailable",
+          };
         }
 
         candidate.lastKnownMm2Value = Number(profile.totalValue);
@@ -1857,16 +1899,32 @@ async function refreshMm2ValueIndex({
             profile?.source ?? "RBLXValue API v2 profile",
         };
       } catch (error) {
+        const status = Number(error?.status);
+        console.warn(
+          `MM2 value source lookup failed for Roblox user ${userId}${status ? ` (HTTP ${status})` : ""}:`,
+          error,
+        );
+
+        // Do not poison the 30-minute cache on transient provider failures.
+        if (status === 408 || status === 429 || status >= 500) {
+          return {
+            userId,
+            available: false,
+            reason: "mm2-profile-transient",
+          };
+        }
+
         candidate.lastKnownMm2ValueAt = Date.now();
         candidate.lastKnownMm2Value = null;
         candidate.lastKnownMm2ItemCount = null;
         candidate.lastKnownMm2ValueSource =
           "RBLXValue API v2 profile";
-        console.warn(
-          `MM2 value index lookup failed for Roblox user ${userId}:`,
-          error,
-        );
-        return { userId, available: false };
+
+        return {
+          userId,
+          available: false,
+          reason: "mm2-profile-unavailable",
+        };
       }
     },
   );
@@ -1896,7 +1954,14 @@ async function refreshMm2ValueIndex({
   return {
     checked: results.length,
     available: results.filter((result) => result?.available).length,
-    unavailable: results.filter((result) => !result?.available).length,
+    unavailable: results.filter(
+      (result) =>
+        !result?.available &&
+        result?.reason !== "username-unavailable",
+    ).length,
+    usernameResolutionUnavailable: results.filter(
+      (result) => result?.reason === "username-unavailable",
+    ).length,
     qualified: results.filter((result) => result?.qualifies).length,
     persisted: watchablePlayers.length,
     watchlistTotal: persisted.total ?? 0,
@@ -2169,6 +2234,8 @@ function buildMm2ValueScanResult({
   mm2ProfilesCheckedThisPass = 0,
   mm2ProfilesAvailableThisPass = 0,
   mm2ProfilesUnavailableThisPass = 0,
+  mm2UsernameResolutionUnavailable = 0,
+  mm2IndexTransientFailure = false,
   mm2ValueIndexQualifiedCount = 0,
   mm2ValueIndexKnownCount = 0,
 }) {
@@ -2191,6 +2258,8 @@ function buildMm2ValueScanResult({
     mm2ProfilesCheckedThisPass,
     mm2ProfilesAvailableThisPass,
     mm2ProfilesUnavailableThisPass,
+    mm2UsernameResolutionUnavailable,
+    mm2IndexTransientFailure,
     mm2ValueIndexQualifiedCount,
     mm2ValueIndexKnownCount,
     mm2ValueUnavailableCount: checks.filter(
