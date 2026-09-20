@@ -1,5 +1,7 @@
 name: Preflight
 
+# Validates the full branch before main/Railway.
+
 on:
   push:
     branches:
