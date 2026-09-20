@@ -2014,7 +2014,8 @@ async function buildMm2ValueTarget(
   }
 
   const hasFreshIndexedMm2Value =
-    Number.isFinite(Number(candidate?.lastKnownMm2Value)) &&
+    typeof candidate?.lastKnownMm2Value === "number" &&
+    Number.isFinite(candidate.lastKnownMm2Value) &&
     Number(candidate?.lastKnownMm2ValueAt ?? 0) > 0 &&
     Date.now() - Number(candidate.lastKnownMm2ValueAt) <
       MM2_VALUE_INDEX_TTL_MS;
