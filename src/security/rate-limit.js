@@ -3,6 +3,7 @@ const DEFAULT_MAX_REQUESTS = 8;
 
 export class SlidingWindowRateLimiter {
   #entries = new Map();
+  #checks = 0;
 
   constructor({
     windowMs = DEFAULT_WINDOW_MS,
@@ -13,6 +14,11 @@ export class SlidingWindowRateLimiter {
   }
 
   check(key, now = Date.now()) {
+    this.#checks += 1;
+    if (this.#checks % 100 === 0) {
+      this.#prune(now);
+    }
+
     const timestamps = (this.#entries.get(key) ?? []).filter(
       (timestamp) => now - timestamp < this.windowMs,
     );
@@ -32,6 +38,17 @@ export class SlidingWindowRateLimiter {
 
   clear() {
     this.#entries.clear();
+    this.#checks = 0;
+  }
+
+  #prune(now) {
+    for (const [key, timestamps] of this.#entries) {
+      const fresh = timestamps.filter(
+        (timestamp) => now - timestamp < this.windowMs,
+      );
+      if (fresh.length === 0) this.#entries.delete(key);
+      else this.#entries.set(key, fresh);
+    }
   }
 }
 
