@@ -1501,6 +1501,8 @@ export async function scanMm2JoinActivity({
       maxAttempts: 1,
       interBatchDelayMs: 900,
       stopOnRateLimit: true,
+      fallbackFetcher: getUsersPresenceFallback,
+      fallbackOnRateLimit: true,
     });
 
     const checkedCount = presenceScan.checkedIds.length;
@@ -1553,6 +1555,7 @@ export async function scanMm2JoinActivity({
       scanElapsedMs: Date.now() - startedAt,
       liveCacheHit: false,
       presenceRateLimited: presenceScan.rateLimited === true,
+      presenceFallbackUsed: presenceScan.usedFallback === true,
       scanCursorStart: start,
       scanCursorNext: mm2PresenceCursor,
       sources: [
@@ -3313,10 +3316,12 @@ async function getPresenceBatchedUnlocked(
       ? options.fallbackFetcher
       : null;
   const stopOnRateLimit = options.stopOnRateLimit !== false;
+  const fallbackOnRateLimit = options.fallbackOnRateLimit === true;
 
   const presences = [];
   const checkedIds = [];
   let rateLimited = false;
+  let usedFallback = false;
 
   for (let index = 0; index < userIds.length; index += batchSize) {
     const batch = userIds
@@ -3365,6 +3370,29 @@ async function getPresenceBatchedUnlocked(
           console.warn(
             "Roblox presence API rate-limited; entering shared backoff.",
           );
+
+          if (fallbackOnRateLimit && fallbackFetcher && pending.size > 0) {
+            try {
+              const fallbackResult = await fallbackFetcher([...pending]);
+              for (const presence of Array.isArray(fallbackResult)
+                ? fallbackResult
+                : []) {
+                const userId = Number(presence?.userId);
+                if (!pending.has(userId)) continue;
+                resolved.set(userId, {
+                  ...presence,
+                  presenceSource: "RoProxy public Roblox API proxy",
+                });
+                pending.delete(userId);
+              }
+              if (resolved.size > 0) usedFallback = true;
+            } catch (fallbackError) {
+              console.warn(
+                "Secondary public presence route failed after Roblox 429:",
+                fallbackError,
+              );
+            }
+          }
           break;
         }
 
@@ -3424,6 +3452,7 @@ async function getPresenceBatchedUnlocked(
             ...presence,
             presenceSource: "RoProxy public Roblox API proxy",
           });
+          usedFallback = true;
           pending.delete(userId);
         }
       } catch (error) {
@@ -3434,7 +3463,7 @@ async function getPresenceBatchedUnlocked(
     presences.push(...resolved.values());
     checkedIds.push(...resolved.keys());
 
-    if (rateLimited && stopOnRateLimit) {
+    if (rateLimited && stopOnRateLimit && pending.size > 0) {
       break;
     }
 
@@ -3447,6 +3476,7 @@ async function getPresenceBatchedUnlocked(
     presences,
     checkedIds: [...new Set(checkedIds)],
     rateLimited,
+    usedFallback,
   };
 }
 
