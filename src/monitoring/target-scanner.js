@@ -95,11 +95,12 @@ const ROLIMONS_SEARCH_TERMS_PER_REFRESH = 6;
 const ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const JAILBREAK_TRADE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 20;
-const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 2 * 60 * 1000;
-const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 400;
-const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 900;
-const DEFAULT_TARGET_LIVE_CACHE_BACKOFF_MS = 3 * 60 * 1000;
+const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 8 * 60 * 1000;
+const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 500;
+const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 1_200;
+const DEFAULT_TARGET_LIVE_CACHE_BACKOFF_MS = 10 * 60 * 1000;
+const DEFAULT_PRESENCE_API_BACKOFF_MS = 3 * 60 * 1000;
 const GROUP_SEARCH_TERMS_PER_REFRESH = 3;
 const GROUPS_PER_SEARCH_TERM = 2;
 const GROUP_MEMBERSHIP_SEEDS_PER_REFRESH = 4;
@@ -152,6 +153,7 @@ let targetLiveCacheTimer = null;
 let liveTargetCursor = 0;
 let lastLiveCacheRefreshAt = 0;
 let liveCacheBackoffUntil = 0;
+let presenceApiBackoffUntil = 0;
 let searchTermCursor = 0;
 let groupSearchTermCursor = 0;
 let leaderboardPageCursor = 1;
@@ -237,8 +239,7 @@ export async function refreshTargetLiveCache() {
   await syncWatchlistCandidates();
 
   const now = Date.now();
-  if (now < liveCacheBackoffUntil) {
-    pruneLiveTargetCache(now);
+  if (now < liveCacheBackoffUntil || now < presenceApiBackoffUntil) {
     return {
       verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
       checkedCount: 0,
@@ -552,10 +553,34 @@ export async function scanDiscoveredTargets({
     const cachedVerified = cachedResults
       .filter((player) => player?.qualifies)
       .slice(0, Math.min(MAX_TARGETS, requestedLimit + 2));
-    const finalCached = await revalidateCurrentlyInGame(cachedVerified);
+    const upstreamBackingOff = Date.now() < presenceApiBackoffUntil;
+    const finalCached = upstreamBackingOff
+      ? {
+          players: cachedVerified,
+          leftGameCount: 0,
+          unavailableCount: 0,
+          rateLimited: true,
+          usedCachedPresenceFallback: true,
+        }
+      : await revalidateCurrentlyInGame(cachedVerified);
 
-    if (finalCached.players.length >= requestedLimit) {
-      const selectedPlayers = shuffle(finalCached.players)
+    const cachedFallback =
+      finalCached.rateLimited === true &&
+      cachedVerified.length > 0 &&
+      finalCached.players.length < requestedLimit
+        ? {
+            ...finalCached,
+            players: cachedVerified,
+            usedCachedPresenceFallback: true,
+          }
+        : finalCached;
+
+    if (
+      cachedFallback.players.length >= requestedLimit ||
+      (cachedFallback.usedCachedPresenceFallback &&
+        cachedFallback.players.length > 0)
+    ) {
+      const selectedPlayers = shuffle(cachedFallback.players)
         .slice(0, requestedLimit)
         .map(({ qualifies, ...player }) => player);
       await rememberSurfacedTargets(selectedPlayers);
@@ -571,9 +596,12 @@ export async function scanDiscoveredTargets({
         candidateSourceCounts: getPoolSourceCounts(),
         presenceScannedCount: cachedPresences.length,
         activeCount: cachedPresences.length,
-        verifiedCount: finalCached.players.length,
-        finalPresenceLeftGameCount: finalCached.leftGameCount,
-        finalPresenceUnavailableCount: finalCached.unavailableCount,
+        verifiedCount: cachedFallback.players.length,
+        finalPresenceLeftGameCount: cachedFallback.leftGameCount,
+        finalPresenceUnavailableCount: cachedFallback.unavailableCount,
+        presenceRateLimited: cachedFallback.rateLimited === true,
+        usedCachedPresenceFallback:
+          cachedFallback.usedCachedPresenceFallback === true,
         verificationAttempts: cachedResults.length,
         valueUnavailableCount: 0,
         belowValueCount: 0,
@@ -582,8 +610,8 @@ export async function scanDiscoveredTargets({
         profileUnavailableCount: 0,
         verificationErrorCount: 0,
         preRecheckVerifiedCount: cachedVerified.length,
-        joinReadyCount: finalCached.players.filter((player) => player.joinReady).length,
-        publicServerConfirmedCount: finalCached.players.filter((player) => player.publicServerConfirmed).length,
+        joinReadyCount: cachedFallback.players.filter((player) => player.joinReady).length,
+        publicServerConfirmedCount: cachedFallback.players.filter((player) => player.publicServerConfirmed).length,
         liveCacheHit: true,
         liveCacheSize: liveTargetCache.size,
         verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
@@ -660,6 +688,7 @@ export async function scanDiscoveredTargets({
   let belowRapCount = 0;
   let profileUnavailableCount = 0;
   let verificationErrorCount = 0;
+  let presenceRateLimited = false;
   const maxActiveToVerify = getPositiveIntegerEnv(
     "ROBLOX_TARGET_MAX_ACTIVE_TO_VERIFY",
     DEFAULT_MAX_ACTIVE_TO_VERIFY,
@@ -676,9 +705,14 @@ export async function scanDiscoveredTargets({
     if (verificationAttempts >= maxActiveToVerify) break;
 
     const wave = discovery.userIds.slice(offset, offset + waveSize);
-    const presenceScan = await getPresenceBatched(wave);
+    const presenceScan = await getPresenceBatched(wave, {
+      maxAttempts: 1,
+      interBatchDelayMs: 1_000,
+      stopOnRateLimit: true,
+    });
     markCandidatesChecked(presenceScan.checkedIds);
     presenceScannedCount += presenceScan.checkedIds.length;
+    if (presenceScan.rateLimited) presenceRateLimited = true;
 
     const inGamePresences = presenceScan.presences
       .filter(
@@ -698,6 +732,10 @@ export async function scanDiscoveredTargets({
 
     for (const presence of inGamePresences) {
       activeSeen.set(Number(presence.userId), presence);
+    }
+
+    if (presenceScan.rateLimited && inGamePresences.length === 0) {
+      break;
     }
 
     const remainingVerifyBudget =
@@ -756,6 +794,8 @@ export async function scanDiscoveredTargets({
   const stillInGamePlayers = await revalidateCurrentlyInGame(
     verifiedPlayers,
   );
+  presenceRateLimited =
+    presenceRateLimited || stillInGamePlayers.rateLimited === true;
   const selectedPlayers = shuffle(stillInGamePlayers.players)
     .slice(0, requestedLimit)
     .map(({ qualifies, ...player }) => player);
@@ -775,6 +815,8 @@ export async function scanDiscoveredTargets({
     verifiedCount: stillInGamePlayers.players.length,
     finalPresenceLeftGameCount: stillInGamePlayers.leftGameCount,
     finalPresenceUnavailableCount: stillInGamePlayers.unavailableCount,
+    presenceRateLimited,
+    usedCachedPresenceFallback: false,
     verificationAttempts,
     valueUnavailableCount,
     belowValueCount,
@@ -2772,58 +2814,44 @@ function getTopLimiteds(inventory) {
 
 async function revalidateCurrentlyInGame(players) {
   if (!Array.isArray(players) || players.length === 0) {
-    return { players: [], leftGameCount: 0, unavailableCount: 0 };
+    return {
+      players: [],
+      leftGameCount: 0,
+      unavailableCount: 0,
+      rateLimited: false,
+    };
   }
 
   const userIds = players
     .map((player) => Number(player?.id))
     .filter((userId) => Number.isInteger(userId) && userId > 0);
 
-  // Use two fresh final samples in small batches. A successful second sample
-  // is authoritative. If the second request does not return a user at all,
-  // fall back only to the first final sample, never the old initial presence.
-  const firstCheck = await getPresenceBatched(userIds, {
-    batchSize: FINAL_RECHECK_BATCH_SIZE,
-    maxAttempts: 3,
-    interBatchDelayMs: 60,
-    individualFallback: true,
-    fallbackFetcher: getUsersPresenceFallback,
-  });
-
-  await sleep(250);
-
-  const secondCheck = await getPresenceBatched(userIds, {
-    batchSize: FINAL_RECHECK_BATCH_SIZE,
-    maxAttempts: 3,
-    interBatchDelayMs: 60,
-    individualFallback: true,
-    fallbackFetcher: getUsersPresenceFallback,
-  });
-
-  const firstByUserId = new Map(
-    firstCheck.presences.map((presence) => [
-      Number(presence.userId),
-      presence,
-    ]),
-  );
-  const secondByUserId = new Map(
-    secondCheck.presences.map((presence) => [
-      Number(presence.userId),
-      presence,
-    ]),
-  );
-  const secondCheckedIds = new Set(secondCheck.checkedIds.map(Number));
-
-  const decisiveByUserId = new Map();
-  for (const userId of userIds) {
-    const presence = secondCheckedIds.has(userId)
-      ? secondByUserId.get(userId)
-      : firstByUserId.get(userId);
-    if (presence) decisiveByUserId.set(userId, presence);
+  if (Date.now() < presenceApiBackoffUntil) {
+    return {
+      players: [],
+      leftGameCount: 0,
+      unavailableCount: userIds.length,
+      rateLimited: true,
+    };
   }
 
+  const check = await getPresenceBatched(userIds, {
+    batchSize: FINAL_RECHECK_BATCH_SIZE,
+    maxAttempts: 1,
+    interBatchDelayMs: 500,
+    stopOnRateLimit: true,
+  });
+
+  const presenceByUserId = new Map(
+    check.presences.map((presence) => [
+      Number(presence.userId),
+      presence,
+    ]),
+  );
+  const checkedIds = new Set(check.checkedIds.map(Number));
+
   const inGameByUserId = new Map(
-    [...decisiveByUserId.entries()].filter(
+    [...presenceByUserId.entries()].filter(
       ([, presence]) => Number(presence?.userPresenceType) === 2,
     ),
   );
@@ -2845,7 +2873,8 @@ async function revalidateCurrentlyInGame(players) {
     })
     .sort((left, right) => {
       if (left.publicServerConfirmed !== right.publicServerConfirmed) {
-        return Number(right.publicServerConfirmed) - Number(left.publicServerConfirmed);
+        return Number(right.publicServerConfirmed) -
+          Number(left.publicServerConfirmed);
       }
       if (left.joinReady !== right.joinReady) {
         return Number(right.joinReady) - Number(left.joinReady);
@@ -2857,14 +2886,12 @@ async function revalidateCurrentlyInGame(players) {
     players: confirmedPlayers,
     leftGameCount: players.filter((player) => {
       const id = Number(player.id);
-      return (
-        decisiveByUserId.has(id) &&
-        !inGameByUserId.has(id)
-      );
+      return checkedIds.has(id) && !inGameByUserId.has(id);
     }).length,
     unavailableCount: players.filter(
-      (player) => !decisiveByUserId.has(Number(player.id)),
+      (player) => !checkedIds.has(Number(player.id)),
     ).length,
+    rateLimited: check.rateLimited === true,
   };
 }
 
@@ -2882,7 +2909,7 @@ export async function getPresenceBatched(
     1,
     Number(options.batchSize) || PRESENCE_BATCH_SIZE,
   );
-  const maxAttempts = Math.max(1, Number(options.maxAttempts) || 4);
+  const maxAttempts = Math.max(1, Number(options.maxAttempts) || 2);
   const interBatchDelayMs = Math.max(
     0,
     Number(options.interBatchDelayMs) || 0,
@@ -2892,9 +2919,11 @@ export async function getPresenceBatched(
     typeof options.fallbackFetcher === "function"
       ? options.fallbackFetcher
       : null;
+  const stopOnRateLimit = options.stopOnRateLimit !== false;
 
   const presences = [];
   const checkedIds = [];
+  let rateLimited = false;
 
   for (let index = 0; index < userIds.length; index += batchSize) {
     const batch = userIds
@@ -2930,10 +2959,23 @@ export async function getPresenceBatched(
         }
       } catch (error) {
         const status = Number(error?.status);
-        const retryable =
-          status === 429 ||
-          status === 408 ||
-          status >= 500;
+        if (status === 429) {
+          rateLimited = true;
+          presenceApiBackoffUntil = Math.max(
+            presenceApiBackoffUntil,
+            Date.now() +
+              getPositiveIntegerEnv(
+                "ROBLOX_PRESENCE_API_BACKOFF_MS",
+                DEFAULT_PRESENCE_API_BACKOFF_MS,
+              ),
+          );
+          console.warn(
+            "Roblox presence API rate-limited; entering shared backoff.",
+          );
+          break;
+        }
+
+        const retryable = status === 408 || status >= 500;
 
         if (!retryable || attempt >= maxAttempts - 1) {
           console.warn("Roblox presence batch failed:", error);
@@ -2942,13 +2984,13 @@ export async function getPresenceBatched(
 
         const delayMs = 400 * 2 ** attempt;
         console.warn(
-          `Roblox presence batch throttled/unavailable (HTTP ${status || "?"}); retrying in ${delayMs}ms.`,
+          `Roblox presence batch unavailable (HTTP ${status || "?"}); retrying in ${delayMs}ms.`,
         );
         await sleep(delayMs);
       }
     }
 
-    if (individualFallback && pending.size > 0) {
+    if (!rateLimited && individualFallback && pending.size > 0) {
       for (const userId of [...pending]) {
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
@@ -2979,7 +3021,7 @@ export async function getPresenceBatched(
     // If the official Roblox presence route omitted an ID even after retries,
     // use a separate public Roblox API proxy as a final fresh signal. We still
     // require an explicit InGame presence before returning a target.
-    if (fallbackFetcher && pending.size > 0) {
+    if (!rateLimited && fallbackFetcher && pending.size > 0) {
       try {
         const fallbackResult = await fallbackFetcher([...pending]);
         for (const presence of Array.isArray(fallbackResult) ? fallbackResult : []) {
@@ -2999,6 +3041,10 @@ export async function getPresenceBatched(
     presences.push(...resolved.values());
     checkedIds.push(...resolved.keys());
 
+    if (rateLimited && stopOnRateLimit) {
+      break;
+    }
+
     if (index + batchSize < userIds.length) {
       await sleep(interBatchDelayMs || 120);
     }
@@ -3007,6 +3053,7 @@ export async function getPresenceBatched(
   return {
     presences,
     checkedIds: [...new Set(checkedIds)],
+    rateLimited,
   };
 }
 
