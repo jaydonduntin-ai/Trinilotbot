@@ -40,7 +40,7 @@ export const rbx2mm2ValueCommand = {
 
     await interaction.deferReply({ ephemeral: true });
     await interaction.editReply(
-      `Scanning current MM2 players and verifying ${minimumMm2Value.toLocaleString()}+ MM2 inventory value…`,
+      `Building the ${minimumMm2Value.toLocaleString()}+ MM2 value index, then checking who is live in MM2…`,
     );
 
     try {
@@ -59,9 +59,11 @@ export const rbx2mm2ValueCommand = {
             ? `Found ${result.players.length} current MM2 player${result.players.length === 1 ? "" : "s"} with verified MM2 inventory value of ${minimumMm2Value.toLocaleString()}+.`
             : result.presenceRateLimited && !result.presenceFallbackUsed
               ? "Roblox is rate-limiting live presence checks right now."
-              : result.scanComplete
-                ? `No current MM2 player with verified MM2 inventory value of ${minimumMm2Value.toLocaleString()}+ was found after this sweep.`
-                : `No ${minimumMm2Value.toLocaleString()}+ MM2-value match was found in the ${Number(result.presenceScannedCount ?? 0).toLocaleString()} users checked this pass. The next scan continues forward.`,
+              : (result.mm2ValueIndexQualifiedCount ?? 0) === 0
+                ? `No ${minimumMm2Value.toLocaleString()}+ MM2-value profile is indexed yet. This pass checked ${Number(result.mm2ProfilesCheckedThisPass ?? 0).toLocaleString()} more candidates through RBLXValue; the next run continues building the index.`
+                : result.scanComplete
+                  ? `No indexed ${minimumMm2Value.toLocaleString()}+ MM2-value player is currently active in MM2.`
+                  : `No live MM2 match was found among the indexed ${minimumMm2Value.toLocaleString()}+ value users checked this pass. The next scan continues forward.`,
         embeds: batches[0] ?? [],
       });
 
@@ -86,13 +88,15 @@ function buildEmbeds(result) {
     .setTitle("Murder Mystery 2 · Value live scan")
     .setDescription(
       [
-        `Candidate pool: ${Number(result.candidateCount ?? 0).toLocaleString()}`,
-        `Candidates checked: ${Number(result.presenceScannedCount ?? 0).toLocaleString()}`,
+        `Source candidate pool: ${Number(result.candidatePoolSize ?? result.candidateCount ?? 0).toLocaleString()}`,
+        `MM2 profiles indexed: ${Number(result.mm2ValueIndexKnownCount ?? 0).toLocaleString()}`,
+        `${Number(result.minimumMm2Value ?? DEFAULT_MM2_VALUE).toLocaleString()}+ MM2 value index: ${Number(result.mm2ValueIndexQualifiedCount ?? 0).toLocaleString()}`,
+        `New MM2 profiles checked: ${Number(result.mm2ProfilesCheckedThisPass ?? 0).toLocaleString()}`,
+        `Profile values available: ${Number(result.mm2ProfilesAvailableThisPass ?? 0).toLocaleString()}`,
+        `Profile values unavailable: ${Number(result.mm2ProfilesUnavailableThisPass ?? 0).toLocaleString()}`,
+        `Indexed users presence-checked: ${Number(result.presenceScannedCount ?? 0).toLocaleString()}`,
         `In-game users seen: ${result.totalInGameSeen ?? 0}`,
         `MM2 active seen: ${result.gameActiveCount ?? 0}`,
-        `MM2 values checked: ${result.mm2ValueChecksAttempted ?? 0}`,
-        `Below MM2 value: ${result.belowMm2ValueCount ?? 0}`,
-        `MM2 value unavailable: ${result.mm2ValueUnavailableCount ?? 0}`,
         `Verified results: ${result.verifiedCount ?? 0}`,
         `MM2 value threshold: ${Number(result.minimumMm2Value ?? DEFAULT_MM2_VALUE).toLocaleString()}+`,
         "Roblox RAP prefilter: off",
@@ -103,7 +107,7 @@ function buildEmbeds(result) {
     .addFields({
       name: "Verification source",
       value:
-        "RBLXValue API v2 MM2 profile value only. Presence is verified separately through Roblox public presence.",
+        "RBLXValue API v2 is used only to verify MM2 profile/inventory value. Roblox public presence is then used to check whether indexed high-value users are currently in Murder Mystery 2.",
       inline: false,
     })
     .setTimestamp();
