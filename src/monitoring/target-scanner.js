@@ -1767,19 +1767,12 @@ async function refreshMm2ValueIndex({
     })
     .map((candidate) => Number(candidate.userId));
 
-  const start = mm2ValueDiscoveryCursor % ordered.length;
-  const batch = [];
-  const batchSize = Math.min(
-    MM2_VALUE_DISCOVERY_BATCH_SIZE,
-    ordered.length,
+  const batch = ordered.slice(
+    0,
+    Math.min(MM2_VALUE_DISCOVERY_BATCH_SIZE, ordered.length),
   );
 
-  for (let offset = 0; offset < batchSize; offset += 1) {
-    batch.push(ordered[(start + offset) % ordered.length]);
-  }
-
-  mm2ValueDiscoveryCursor =
-    (start + Math.max(batch.length, 1)) % ordered.length;
+  mm2ValueDiscoveryCursor += batch.length;
 
   const results = await mapWithConcurrency(
     batch,
