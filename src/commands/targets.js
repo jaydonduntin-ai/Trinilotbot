@@ -39,7 +39,7 @@ export const targetsCommand = {
         .setDescription(
           `Random results to return, default ${DEFAULT_TARGET_COUNT}, max ${MAX_TARGETS}.`,
         )
-        .setMinValue(MIN_TARGET_THRESHOLD)
+        .setMinValue(1)
         .setMaxValue(MAX_TARGETS),
     ),
 
@@ -68,13 +68,23 @@ export const targetsCommand = {
       });
 
       const embeds = buildTargetEmbeds(result);
+      const embedBatches = batchEmbedsForDiscord(embeds);
+      const content =
+        result.players.length > 0
+          ? `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}.`
+          : `No currently in-game public profile matching ${formatThresholds(result)} was verified in this discovery pass.`;
+
       await interaction.editReply({
-        content:
-          result.players.length > 0
-            ? `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}.`
-            : `No currently in-game public profile matching ${formatThresholds(result)} was verified in this discovery pass.`,
-        embeds: embeds.slice(0, 10),
+        content,
+        embeds: embedBatches[0] ?? [],
       });
+
+      for (const batch of embedBatches.slice(1)) {
+        await interaction.followUp({
+          embeds: batch,
+          ephemeral: true,
+        });
+      }
     } catch (error) {
       console.error("Automatic target discovery failed:", error);
       await interaction.editReply(
@@ -91,33 +101,10 @@ function buildTargetEmbeds(result) {
     .setDescription(
       [
         `Verified 450k+ index: ${result.verifiedIndexCount ?? 0}`,
-        `Live cache: ${result.liveCacheSize ?? 0}`,
-        `Live-cache hit: ${result.liveCacheHit ? "Yes" : "No — broadened search"}`,
-        `Candidate pool: ${result.candidatePoolSize ?? result.candidateCount ?? 0}`,
-        `Candidates selected: ${result.candidateCount ?? 0}`,
-        `Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
-        `Currently in-game seen: ${result.activeCount ?? 0}`,
-        `Value/RAP checks attempted: ${result.verificationAttempts ?? 0}`,
-        `Value unavailable: ${result.valueUnavailableCount ?? 0}`,
-        `Below value: ${result.belowValueCount ?? 0}`,
-        `RAP unavailable: ${result.rapUnavailableCount ?? 0}`,
-        `Below RAP: ${result.belowRapCount ?? 0}`,
-        `Profile metadata fallback: ${result.profileUnavailableCount ?? 0}`,
-        `Verification errors: ${result.verificationErrorCount ?? 0}`,
-        `Passed threshold before live recheck: ${result.preRecheckVerifiedCount ?? 0}`,
-        `Left game before final recheck: ${result.finalPresenceLeftGameCount ?? 0}`,
-        `Final presence unavailable: ${result.finalPresenceUnavailableCount ?? 0}`,
-        `Cooling candidates skipped: ${result.recentlyCheckedSkipped ?? 0}`,
-        `Verified scan watchlist: ${result.candidateSourceCounts?.watchlist ?? 0}`,
-        `Trade-ad users: ${result.candidateSourceCounts?.tradeAds ?? 0}`,
-        `Jailbreak trade users: ${result.candidateSourceCounts?.jailbreakTrades ?? 0}`,
-        `Limited owners: ${result.candidateSourceCounts?.limitedOwners ?? 0}`,
-        `Leaderboard users: ${result.candidateSourceCounts?.leaderboard ?? 0}`,
-        `Marketplace owners: ${result.candidateSourceCounts?.marketplaceOwners ?? 0}`,
-        `Verified live above threshold: ${result.verifiedCount ?? 0}`,
-        `Join-ready profiles: ${result.joinReadyCount ?? 0}`,
-        `Public server confirmed: ${result.publicServerConfirmedCount ?? 0}`,
-        `Scan time: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
+        `Live cache: ${result.liveCacheSize ?? 0} · Cache hit: ${result.liveCacheHit ? "Yes" : "No"}`,
+        `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
+        `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
+        `Join-ready: ${result.joinReadyCount ?? 0} · Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.minimumValue !== null && result.minimumValue !== undefined
           ? `Value threshold: ${result.minimumValue.toLocaleString()}`
           : null,
@@ -131,8 +118,8 @@ function buildTargetEmbeds(result) {
     .addFields({
       name: "Discovery source",
       value:
-        "Candidates: Roblox public limited/Marketplace owners + Rolimon's trade ads/leaderboard\nVerification: Roblox current presence + public value data\n" +
-        (truncate((result.sources ?? []).join("\n"), 850) || "Unavailable"),
+        "Public Roblox presence + public RAP/value sources. " +
+        (truncate((result.sources ?? []).join(" · "), 450) || "Unavailable"),
       inline: false,
     })
     .setFooter({
@@ -181,18 +168,8 @@ function buildTargetEmbeds(result) {
           inline: false,
         },
         {
-          name: "Value source",
-          value: player.valueSource ?? "Unavailable",
-          inline: false,
-        },
-        {
-          name: "RAP source",
-          value: player.rapSource ?? "Unavailable",
-          inline: false,
-        },
-        {
-          name: "Top public limiteds",
-          value: truncate(limiteds, 1000),
+          name: "Source",
+          value: truncate(player.rapSource ?? player.valueSource ?? "Public data", 180),
           inline: false,
         },
       );
@@ -242,6 +219,48 @@ function formatThresholds(result) {
     parts.push(`${result.minimumRap.toLocaleString()}+ RAP`);
   }
   return parts.length > 0 ? parts.join(" and ") : "the configured thresholds";
+}
+
+function batchEmbedsForDiscord(embeds) {
+  const batches = [];
+  let current = [];
+  let currentChars = 0;
+
+  for (const embed of embeds) {
+    const chars = countEmbedCharacters(embed);
+
+    if (
+      current.length > 0 &&
+      (current.length >= 10 || currentChars + chars > 5_500)
+    ) {
+      batches.push(current);
+      current = [];
+      currentChars = 0;
+    }
+
+    current.push(embed);
+    currentChars += chars;
+  }
+
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+function countEmbedCharacters(embed) {
+  const data = typeof embed?.toJSON === "function" ? embed.toJSON() : embed ?? {};
+  let total = 0;
+
+  total += String(data.title ?? "").length;
+  total += String(data.description ?? "").length;
+  total += String(data.footer?.text ?? "").length;
+  total += String(data.author?.name ?? "").length;
+
+  for (const field of data.fields ?? []) {
+    total += String(field?.name ?? "").length;
+    total += String(field?.value ?? "").length;
+  }
+
+  return total;
 }
 
 function truncate(value, max) {
