@@ -124,13 +124,13 @@ const MARKETPLACE_GROUP_SEEDS = 6;
 const MARKETPLACE_OWNER_LIMIT = 20;
 const PRESENCE_BATCH_SIZE = 50;
 const VERIFY_CONCURRENCY = 5;
-const MM2_PROFILE_CHECK_LIMIT = 24;
-const MM2_PROFILE_CONCURRENCY = 2;
+const MM2_PROFILE_CHECK_LIMIT = 8;
+const MM2_PROFILE_CONCURRENCY = 4;
 const MM2_SCAN_WAVE_SIZE = 300;
-const MM2_SCAN_TIME_BUDGET_MS = 45_000;
-const MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS = 110_000;
-const MM2_ACTIVITY_SWEEP_CHUNK_SIZE = 450;
-const MM2_ACTIVITY_THROTTLE_PAUSE_MS = 12_000;
+const MM2_SCAN_TIME_BUDGET_MS = 30_000;
+const MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS = 28_000;
+const MM2_ACTIVITY_SWEEP_CHUNK_SIZE = 250;
+const MM2_ACTIVITY_THROTTLE_PAUSE_MS = 3_000;
 
 const SEARCH_TERMS = [
   "pro","king","queen","dark","shadow","cool","game","player","star","wolf",
@@ -1708,7 +1708,11 @@ async function buildMm2ValueTarget(
     await Promise.allSettled([
       getRobloxUserById(userId),
       getAvatarThumbnail(userId),
-      getRblxValueProfile({ userId }),
+      getRblxValueProfile({
+        userId,
+        requestTimeoutMs: 3_500,
+        maxRetries: 0,
+      }),
     ]);
 
   const mm2Profile =
