@@ -81,19 +81,22 @@ function buildEmbeds(result) {
     .setTitle("Murder Mystery 2 · Live activity")
     .setDescription(
       [
-        `Candidate pool: ${result.candidatePoolSize ?? result.candidateCount ?? 0}`,
-        `Candidates checked: ${result.presenceScannedCount ?? 0}`,
+        `Verified RAP index: ${result.verifiedRapIndexCount ?? 0}`,
+        `Candidates checked this pass: ${result.presenceScannedCount ?? 0}`,
         `MM2 active seen: ${result.gameActiveCount ?? 0}`,
         `Verified results: ${result.verifiedCount ?? 0}`,
         `Mode: ${result.liveCacheHit ? "live cache" : result.presenceRateLimited ? "rate-limited" : "fresh presence"}`,
+        !result.liveCacheHit && (result.verifiedRapIndexCount ?? 0) > 0
+          ? `Coverage: ${Math.min(result.presenceScannedCount ?? 0, result.verifiedRapIndexCount ?? 0).toLocaleString()} / ${Number(result.verifiedRapIndexCount).toLocaleString()} indexed users this pass`
+          : null,
         `RAP threshold: ${Number(result.minimumRap ?? DEFAULT_TARGET_RAP).toLocaleString()}+`,
         `Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
-      ].join("\n"),
+      ].filter(Boolean).join("\n"),
     )
     .addFields({
       name: "Sources",
       value:
-        "Same SE TARG discovery pool + Roblox public live presence. Results are filtered to Murder Mystery 2 activity only.",
+        "Same SE TARG verified RAP index + Roblox public live presence. Each pass rotates forward through the index and only returns Murder Mystery 2 activity.",
       inline: false,
     })
     .setTimestamp();
