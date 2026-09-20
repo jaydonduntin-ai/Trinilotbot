@@ -5,6 +5,9 @@ import { startTargetCandidatePoolWarmup } from "./monitoring/target-scanner.js";
 import { startScanWatcher } from "./monitoring/scan-watcher.js";
 import { commandRateLimiter } from "./security/rate-limit.js";
 import { initializeAlertSubscriptions } from "./storage/alert-subscribers.js";
+import { startJoinBridge } from "./web/join-bridge.js";
+
+startJoinBridge();
 
 const token = process.env.DISCORD_BOT_TOKEN?.trim();
 
