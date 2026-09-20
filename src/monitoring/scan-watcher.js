@@ -1,5 +1,5 @@
 import { EmbedBuilder } from "discord.js";
-import { getUsersPresence } from "../roblox/api.js";
+import { getPresenceBatched } from "./target-scanner.js";
 import { getRobloxProfile } from "../roblox/profile.js";
 import {
   getScanWatchlist,
@@ -30,16 +30,13 @@ async function checkScanWatchlist(client) {
   if (entries.length === 0) return;
 
   const ids = entries.map((entry) => entry.userId);
-  const presences = [];
-
-  for (let index = 0; index < ids.length; index += PRESENCE_BATCH_SIZE) {
-    const batch = ids.slice(index, index + PRESENCE_BATCH_SIZE);
-    try {
-      presences.push(...(await getUsersPresence(batch)));
-    } catch (error) {
-      console.warn("Scan watcher presence batch failed:", error);
-    }
-  }
+  const presenceScan = await getPresenceBatched(ids, {
+    batchSize: PRESENCE_BATCH_SIZE,
+    maxAttempts: 1,
+    interBatchDelayMs: 1_000,
+    stopOnRateLimit: true,
+  });
+  const presences = presenceScan.presences;
 
   const presenceById = new Map(
     presences.map((presence) => [Number(presence.userId), presence]),
