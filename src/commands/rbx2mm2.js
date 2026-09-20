@@ -54,7 +54,7 @@ export const rbx2mm2Command = {
             ? result.liveCacheHit
               ? `Found ${result.players.length} recently verified Murder Mystery 2 player${result.players.length === 1 ? "" : "s"} with ${minimumRap.toLocaleString()}+ RAP from the live cache.`
               : `Found ${result.players.length} public Roblox user${result.players.length === 1 ? "" : "s"} currently active in Murder Mystery 2 with ${minimumRap.toLocaleString()}+ RAP.`
-            : result.presenceRateLimited
+            : result.presenceRateLimited && !result.presenceFallbackUsed
               ? "Roblox is rate-limiting live presence checks right now. No recent MM2 cache hit was available."
               : `No ${minimumRap.toLocaleString()}+ RAP users currently active in Murder Mystery 2 were verified in this pass.`,
         embeds: batches[0] ?? [],
@@ -85,7 +85,7 @@ function buildEmbeds(result) {
         `Candidates checked this pass: ${result.presenceScannedCount ?? 0}`,
         `MM2 active seen: ${result.gameActiveCount ?? 0}`,
         `Verified results: ${result.verifiedCount ?? 0}`,
-        `Mode: ${result.liveCacheHit ? "live cache" : result.presenceRateLimited ? "rate-limited" : "fresh presence"}`,
+        `Mode: ${result.liveCacheHit ? "live cache" : result.presenceFallbackUsed ? "public presence fallback" : result.presenceRateLimited ? "rate-limited" : "fresh presence"}`,
         !result.liveCacheHit && (result.verifiedRapIndexCount ?? 0) > 0
           ? `Coverage: ${Math.min(result.presenceScannedCount ?? 0, result.verifiedRapIndexCount ?? 0).toLocaleString()} / ${Number(result.verifiedRapIndexCount).toLocaleString()} indexed users this pass`
           : null,
