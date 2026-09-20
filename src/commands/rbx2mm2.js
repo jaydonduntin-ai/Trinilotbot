@@ -1,33 +1,27 @@
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
+  DEFAULT_MM2_RAP,
   DEFAULT_TARGET_COUNT,
-  DEFAULT_TARGET_RAP,
-  DEFAULT_MM2_VALUE,
   MAX_TARGETS,
-  MIN_TARGET_THRESHOLD,
   MAX_TARGET_THRESHOLD,
-  scanMm2JoinActivity,
+  scanMm2RapActivity,
 } from "../monitoring/target-scanner.js";
+
+const MIN_MM2_RAP = 150_000;
 
 export const rbx2mm2Command = {
   definition: new SlashCommandBuilder()
     .setName("rbx2mm2")
-    .setDescription("Find high-MM2-value Roblox users currently playing Murder Mystery 2.")
-    .addIntegerOption((option) =>
-      option
-        .setName("min_value")
-        .setDescription(
-          `Minimum verified MM2 inventory value; default ${DEFAULT_MM2_VALUE.toLocaleString()}.`,
-        )
-        .setMinValue(0),
+    .setDescription(
+      "Find 150K+ RAP Roblox users currently playing Murder Mystery 2.",
     )
     .addIntegerOption((option) =>
       option
         .setName("min_rap")
         .setDescription(
-          "Optional Roblox limited RAP prefilter; leave blank for MM2-value-only scanning.",
+          `Minimum Roblox RAP; default ${DEFAULT_MM2_RAP.toLocaleString()}.`,
         )
-        .setMinValue(MIN_TARGET_THRESHOLD)
+        .setMinValue(MIN_MM2_RAP)
         .setMaxValue(MAX_TARGET_THRESHOLD),
     )
     .addIntegerOption((option) =>
@@ -41,21 +35,18 @@ export const rbx2mm2Command = {
     ),
 
   async execute(interaction) {
-    const minimumMm2Value =
-      interaction.options.getInteger("min_value") ?? DEFAULT_MM2_VALUE;
     const minimumRap =
-      interaction.options.getInteger("min_rap");
+      interaction.options.getInteger("min_rap") ?? DEFAULT_MM2_RAP;
     const limit =
       interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
     await interaction.deferReply({ ephemeral: true });
     await interaction.editReply(
-      `Scanning live MM2 activity and checking ${minimumMm2Value.toLocaleString()}+ MM2 value…`,
+      `Scanning MM2 live activity for ${minimumRap.toLocaleString()}+ RAP users…`,
     );
 
     try {
-      const result = await scanMm2JoinActivity({
-        minimumMm2Value,
+      const result = await scanMm2RapActivity({
         minimumRap,
         limit,
       });
@@ -66,12 +57,10 @@ export const rbx2mm2Command = {
       await interaction.editReply({
         content:
           result.players.length > 0
-            ? `Found ${result.players.length} Murder Mystery 2 player${result.players.length === 1 ? "" : "s"} with verified MM2 inventory value of ${minimumMm2Value.toLocaleString()}+.`
-            : result.presenceRateLimited && !result.presenceFallbackUsed
-              ? "Roblox is rate-limiting live presence checks right now. No recent MM2 cache hit was available."
-              : result.scanComplete
-                ? `No currently active MM2 player with verified inventory value of ${minimumMm2Value.toLocaleString()}+ was found after this sweep.`
-                : `No ${minimumMm2Value.toLocaleString()}+ MM2-value match was found in the ${(result.presenceScannedCount ?? 0).toLocaleString()} users checked this pass. The next scan continues forward.`,
+            ? `Found ${result.players.length} Murder Mystery 2 player${result.players.length === 1 ? "" : "s"} with ${minimumRap.toLocaleString()}+ Roblox RAP.`
+            : result.presenceRateLimited
+              ? "Roblox is rate-limiting live presence checks right now."
+              : `No current MM2 player with ${minimumRap.toLocaleString()}+ Roblox RAP was verified in this pass.`,
         embeds: batches[0] ?? [],
       });
 
@@ -84,7 +73,7 @@ export const rbx2mm2Command = {
     } catch (error) {
       console.error("/rbx2mm2 failed:", error);
       await interaction.editReply(
-        "MM2 activity lookup is temporarily unavailable. Try again in a moment.",
+        "MM2 RAP activity lookup is temporarily unavailable. Try again in a moment.",
       );
     }
   },
@@ -93,48 +82,33 @@ export const rbx2mm2Command = {
 function buildEmbeds(result) {
   const summary = new EmbedBuilder()
     .setColor(result.players.length > 0 ? 0x57f287 : 0x2f3136)
-    .setTitle("Murder Mystery 2 · Live activity")
+    .setTitle("Murder Mystery 2 · RAP live scan")
     .setDescription(
       [
-        `Candidate pool: ${Number(result.candidateCount ?? 0).toLocaleString()}`,
-        `Candidates checked this pass: ${Number(result.presenceScannedCount ?? 0).toLocaleString()}`,
-        `In-game users seen: ${result.totalInGameSeen ?? 0}`,
+        `Candidate pool: ${Number(result.candidatePoolSize ?? result.candidateCount ?? 0).toLocaleString()}`,
+        `Candidates checked: ${Number(result.presenceScannedCount ?? 0).toLocaleString()}`,
         `MM2 active seen: ${result.gameActiveCount ?? 0}`,
-        `MM2 values checked: ${result.mm2ValueChecksAttempted ?? 0}`,
-        `Below MM2 value: ${result.belowMm2ValueCount ?? 0}`,
-        `MM2 value unavailable: ${result.mm2ValueUnavailableCount ?? 0}`,
+        `RAP checks attempted: ${result.verificationAttempts ?? 0}`,
+        `Below RAP: ${result.belowRapCount ?? 0}`,
+        `RAP unavailable: ${result.rapUnavailableCount ?? 0}`,
         `Verified results: ${result.verifiedCount ?? 0}`,
-        `Mode: ${result.liveCacheHit ? "live cache" : result.presenceFallbackUsed ? "public presence fallback" : result.presenceRateLimited ? "rate-limited" : "fresh presence"}`,
-        result.scanComplete === false
-          ? "Sweep status: partial — next run resumes forward"
-          : result.scanComplete === true
-            ? "Sweep status: complete"
-            : null,
-        `MM2 value threshold: ${Number(result.minimumMm2Value ?? DEFAULT_MM2_VALUE).toLocaleString()}+`,
-        result.minimumRap
-          ? `Optional Roblox RAP prefilter: ${Number(result.minimumRap).toLocaleString()}+`
-          : "Roblox RAP prefilter: off",
+        `Roblox RAP threshold: ${Number(result.minimumRap ?? DEFAULT_MM2_RAP).toLocaleString()}+`,
         `Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
-      ].filter(Boolean).join("\n"),
+      ].join("\n"),
     )
     .addFields({
       name: "Sources",
       value:
-        "SE TARG candidate discovery + Roblox live presence + RBLXValue MM2 profile values. A result must be in Murder Mystery 2 and pass the MM2 inventory-value threshold.",
+        "Same SE TARG discovery streams + Roblox live presence + public Roblox/Rolimon's RAP verification. MM2 inventory value is not used by this command.",
       inline: false,
     })
     .setTimestamp();
 
   const players = result.players.map((player) => {
-    const mm2Value =
-      typeof player.mm2Value === "number"
-        ? `${player.mm2Value.toLocaleString()} MM2 value`
-        : "Unavailable";
     const rap =
       typeof player.rapValue === "number"
         ? `${player.rapValue.toLocaleString()} RAP`
-        : "Not required";
-
+        : "Unavailable";
     const join =
       player.followJoinUrl
         ? `[Direct join MM2 player](<${player.followJoinUrl}>)`
@@ -148,15 +122,6 @@ function buildEmbeds(result) {
         `**Murder Mystery 2 — In Game**\n${join}\n[Roblox profile](${player.profileUrl})`,
       )
       .addFields(
-        { name: "MM2 value", value: mm2Value, inline: true },
-        {
-          name: "MM2 items",
-          value:
-            typeof player.mm2ItemCount === "number"
-              ? player.mm2ItemCount.toLocaleString()
-              : "Unavailable",
-          inline: true,
-        },
         { name: "Roblox RAP", value: rap, inline: true },
         {
           name: "Activity",
@@ -164,24 +129,13 @@ function buildEmbeds(result) {
           inline: true,
         },
         {
-          name: "Presence",
-          value:
-            player.presenceFreshness === "recent"
-              ? "Recently verified in MM2"
-              : "Verified in MM2",
-          inline: true,
-        },
-        {
-          name: "MM2 value source",
-          value: player.mm2ValueSource ?? "RBLXValue API v2",
+          name: "RAP source",
+          value: player.rapSource ?? "Public RAP source",
           inline: false,
         },
       );
 
-    if (player.avatarUrl) {
-      embed.setThumbnail(player.avatarUrl);
-    }
-
+    if (player.avatarUrl) embed.setThumbnail(player.avatarUrl);
     return embed;
   });
 
@@ -212,7 +166,8 @@ function batchEmbedsForDiscord(embeds) {
 }
 
 function countEmbedCharacters(embed) {
-  const data = typeof embed?.toJSON === "function" ? embed.toJSON() : embed ?? {};
+  const data =
+    typeof embed?.toJSON === "function" ? embed.toJSON() : embed ?? {};
   let total = 0;
   total += String(data.title ?? "").length;
   total += String(data.description ?? "").length;
