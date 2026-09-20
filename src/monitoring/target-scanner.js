@@ -1034,7 +1034,11 @@ export async function scanMm2ValueTargets({
       offset,
       offset + MM2_SCAN_WAVE_SIZE,
     );
-    const presenceScan = await getPresenceBatched(wave);
+    const presenceScan = await getPresenceBatched(wave, {
+      maxAttempts: 1,
+      interBatchDelayMs: 1_000,
+      stopOnRateLimit: true,
+    });
     presenceScannedCount += presenceScan.checkedIds.length;
 
     const gamePresences = presenceScan.presences.filter((presence) =>
@@ -1217,11 +1221,35 @@ async function revalidatePlayersForGame(players, game) {
     return [];
   }
 
+  // Every player entering this helper was already observed in the requested
+  // game during the current pass. If Roblox is actively rate-limiting, keep
+  // that recent observation rather than turning valid activity into zero.
+  if (Date.now() < presenceApiBackoffUntil) {
+    return players.map((player) => ({
+      ...player,
+      presenceStatus: "In game",
+      presenceFreshness: "recent",
+    }));
+  }
+
   const userIds = players
     .map((player) => Number(player?.id))
     .filter((userId) => Number.isInteger(userId) && userId > 0);
 
-  const liveCheck = await getPresenceBatched(userIds);
+  const liveCheck = await getPresenceBatched(userIds, {
+    maxAttempts: 1,
+    interBatchDelayMs: 500,
+    stopOnRateLimit: true,
+  });
+
+  if (liveCheck.rateLimited) {
+    return players.map((player) => ({
+      ...player,
+      presenceStatus: "In game",
+      presenceFreshness: "recent",
+    }));
+  }
+
   const activeByUserId = new Map(
     liveCheck.presences
       .filter((presence) => isPresenceForGame(presence, game))
@@ -1236,8 +1264,25 @@ async function revalidatePlayersForGame(players, game) {
         ...player,
         presenceStatus: "In game",
         gameName: presence?.lastLocation || player.gameName,
+        placeId: presence?.placeId ?? player.placeId ?? null,
+        gameId: presence?.gameId ?? player.gameId ?? null,
+        followJoinUrl:
+          player.followJoinUrl ?? getFollowUserJoinUrl(player.id),
+        presenceFreshness: "fresh",
       };
     });
+}
+
+export async function scanMm2JoinActivity({
+  minimumRap = DEFAULT_TARGET_RAP,
+  limit = DEFAULT_TARGET_COUNT,
+} = {}) {
+  return scanGameTargets({
+    gameKey: "mm2",
+    minimumValue: null,
+    minimumRap,
+    limit,
+  });
 }
 
 export async function scanGameTargets({
@@ -1307,6 +1352,10 @@ export async function scanGameTargets({
 
     for (const presence of gamePresences) {
       activeSeen.set(Number(presence.userId), presence);
+    }
+
+    if (presenceScan.rateLimited && gamePresences.length === 0) {
+      break;
     }
 
     for (
