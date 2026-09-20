@@ -10,7 +10,6 @@ test("all slash commands are registered", () => {
     "limitedowners",
     "rbx2dc",
     "rbx2mm2",
-    "rbx2mm2value",
     "dc2rb",
     "alerts",
     "target",
@@ -36,4 +35,18 @@ test("/ping keeps its existing response", async () => {
     },
   });
   assert.equal(response, "Pong!");
+});
+
+
+test("/rbx2mm2 is RAP-only with a 450K minimum", () => {
+  const command = commandModules.find(
+    (candidate) => candidate.definition.name === "rbx2mm2",
+  );
+  const definition = command.definition.toJSON();
+  const minRap = definition.options.find(
+    (option) => option.name === "min_rap",
+  );
+
+  assert.equal(minRap.min_value, 450000);
+  assert.match(definition.description, /450K\+ RAP/i);
 });
