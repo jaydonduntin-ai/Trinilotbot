@@ -38,12 +38,16 @@ export async function getRblxValueInventory({ username, userId }) {
 export async function getRblxValueProfile({
   username,
   userId,
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
+  maxRetries = MAX_RETRIES,
 }) {
   const apiKey = process.env.ROBLOX_RBLXVALUE_API_KEY?.trim();
   const lookup = String(userId ?? username ?? "").trim();
   if (!apiKey || !lookup) return null;
 
-  const cacheKey = `rblxvalue:mm2:profile:${lookup.toLowerCase()}`;
+  const cacheKey =
+    `rblxvalue:mm2:profile:${lookup.toLowerCase()}:` +
+    `${requestTimeoutMs}:${maxRetries}`;
   return providerCache.getOrSet(
     cacheKey,
     async () => {
@@ -52,6 +56,10 @@ export async function getRblxValueProfile({
         url,
         apiKey,
         "profile",
+        {
+          requestTimeoutMs,
+          maxRetries,
+        },
       );
       return normalizeProfile(payload, username ?? lookup, url);
     },
@@ -111,17 +119,25 @@ function normalizeProfile(payload, username, sourceUrl) {
   };
 }
 
-async function fetchRblxValueJson(url, apiKey, routeLabel) {
+async function fetchRblxValueJson(
+  url,
+  apiKey,
+  routeLabel,
+  {
+    requestTimeoutMs = REQUEST_TIMEOUT_MS,
+    maxRetries = MAX_RETRIES,
+  } = {},
+) {
   let lastError = null;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
       const response = await fetch(url, {
         headers: {
           Accept: "application/json",
           "X-Api-Key": apiKey,
         },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(requestTimeoutMs),
       });
 
       if (response.ok) {
@@ -133,7 +149,7 @@ async function fetchRblxValueJson(url, apiKey, routeLabel) {
       );
       error.status = response.status;
 
-      if (response.status !== 429 || attempt >= MAX_RETRIES) {
+      if (response.status !== 429 || attempt >= maxRetries) {
         throw error;
       }
 
@@ -147,7 +163,7 @@ async function fetchRblxValueJson(url, apiKey, routeLabel) {
       lastError = error;
     } catch (error) {
       lastError = error;
-      if (Number(error?.status) !== 429 || attempt >= MAX_RETRIES) {
+      if (Number(error?.status) !== 429 || attempt >= maxRetries) {
         throw error;
       }
     }
