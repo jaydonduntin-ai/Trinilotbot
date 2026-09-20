@@ -84,6 +84,14 @@ const MARKETPLACE_REFRESH_INTERVAL_MS = 8 * 60 * 1000;
 const DEFAULT_SEED_ITEM_COUNT = 12;
 const DEFAULT_OWNERS_PER_ITEM = 20;
 const DEFAULT_SEED_MIN_ITEM_RAP = 75_000;
+
+const MANUAL_LIMITED_OWNER_SEEDS = [
+  { id: 158380697314856, name: "SSHF" },
+  { id: 553970961, name: "Green Queen of the Night" },
+  { id: 1365767, name: "Valkyrie Helm" },
+  { id: 439945661, name: "SKOTN" },
+  { id: 1744060292, name: "Poisoned Horns" },
+];
 const OWNER_CONCURRENCY = 4;
 const OWNER_DISCOVERY_BUDGET_MS = 12_000;
 const SEARCH_TERMS_PER_REFRESH = 12;
@@ -2781,7 +2789,11 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
     }
 
     const seedItems = takeUniqueItems(
-      [...tradeAdSeeds, ...rotatingSeeds],
+      [
+        ...MANUAL_LIMITED_OWNER_SEEDS,
+        ...tradeAdSeeds,
+        ...rotatingSeeds,
+      ],
       seedItemCount,
     );
 
