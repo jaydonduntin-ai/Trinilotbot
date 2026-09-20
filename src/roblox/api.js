@@ -482,15 +482,42 @@ export async function getUserFriends(userId) {
   return Array.isArray(payload?.data) ? payload.data : [];
 }
 
+export async function getRobloxUsersByIds(userIds) {
+  const normalizedIds = [
+    ...new Set(
+      (userIds ?? [])
+        .map((userId) => Number(userId))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
+  if (normalizedIds.length === 0) return [];
+
+  const payload = await fetchRobloxJson(
+    `${USERS_API_URL}/v1/users`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        userIds: normalizedIds,
+        excludeBannedUsers: false,
+      }),
+    },
+  );
+
+  return Array.isArray(payload?.data) ? payload.data : [];
+}
+
 export async function getRobloxUserById(userId) {
   const normalizedId = Number(userId);
   if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
     return null;
   }
 
-  return fetchRobloxJson(
-    `${USERS_API_URL}/v1/users/${encodeURIComponent(normalizedId)}`,
-  );
+  const users = await getRobloxUsersByIds([normalizedId]);
+  return users[0] ?? null;
 }
 
 export async function getUsersPresence(userIds) {
