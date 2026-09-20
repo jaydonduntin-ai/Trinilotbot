@@ -1,4 +1,4 @@
-import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_MM2_RAP,
   DEFAULT_TARGET_COUNT,
@@ -40,7 +40,7 @@ export const rbx2mm2Command = {
     const limit =
       interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await interaction.editReply(
       `Scanning MM2 live activity for ${minimumRap.toLocaleString()}+ RAP users…`,
     );
@@ -67,7 +67,7 @@ export const rbx2mm2Command = {
       for (const batch of batches.slice(1)) {
         await interaction.followUp({
           embeds: batch,
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
     } catch (error) {
