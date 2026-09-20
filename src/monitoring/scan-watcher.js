@@ -8,6 +8,7 @@ import {
 
 const DEFAULT_SCAN_WATCH_INTERVAL_MS = 2 * 60 * 1000;
 const PRESENCE_BATCH_SIZE = 50;
+let scanWatcherRunning = false;
 
 export async function startScanWatcher(client) {
   const intervalMs = readPositiveInteger(
@@ -15,10 +16,18 @@ export async function startScanWatcher(client) {
     DEFAULT_SCAN_WATCH_INTERVAL_MS,
   );
 
-  const run = () =>
-    checkScanWatchlist(client).catch((error) => {
+  const run = async () => {
+    if (scanWatcherRunning) return;
+    scanWatcherRunning = true;
+
+    try {
+      await checkScanWatchlist(client);
+    } catch (error) {
       console.error("Scan watcher run failed:", error);
-    });
+    } finally {
+      scanWatcherRunning = false;
+    }
+  };
 
   setTimeout(run, 15_000);
   const interval = setInterval(run, intervalMs);
