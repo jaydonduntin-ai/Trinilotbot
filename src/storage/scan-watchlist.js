@@ -107,13 +107,31 @@ export async function getScanWatchlist() {
 }
 
 export async function updateScanPresence(userId, presenceType, { alerted = false } = {}) {
-  await initializeScanWatchlist();
-  const entry = entries.get(Number(userId));
-  if (!entry) return;
+  return updateScanPresences([
+    { userId, presenceType, alerted },
+  ]);
+}
 
-  entry.lastPresenceType = Number(presenceType);
-  if (alerted) entry.lastAlertedAt = new Date().toISOString();
-  await persist();
+export async function updateScanPresences(updates) {
+  await initializeScanWatchlist();
+  let changed = 0;
+
+  for (const update of updates ?? []) {
+    const entry = entries.get(Number(update?.userId));
+    if (!entry) continue;
+
+    const nextType = Number(update?.presenceType);
+    if (Number.isInteger(nextType)) {
+      entry.lastPresenceType = nextType;
+    }
+    if (update?.alerted) {
+      entry.lastAlertedAt = new Date().toISOString();
+    }
+    changed += 1;
+  }
+
+  if (changed > 0) await persist();
+  return { changed };
 }
 
 async function persist() {
