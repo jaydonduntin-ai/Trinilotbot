@@ -68,14 +68,14 @@ const GAME_TARGETS = {
 };
 
 const DEFAULT_MAX_CANDIDATES = 500;
-const DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES = 2_500;
-const DEFAULT_TARGET_SCAN_WAVE_SIZE = 500;
+const DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES = 500;
+const DEFAULT_TARGET_SCAN_WAVE_SIZE = 250;
 const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 45_000;
 const DEFAULT_TRUSTED_RAP_TTL_MS = 15 * 60 * 1000;
 const FINAL_RECHECK_BATCH_SIZE = 10;
-const DEFAULT_GAME_SCAN_CANDIDATES = 1_200;
+const DEFAULT_GAME_SCAN_CANDIDATES = 500;
 const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 25_000;
-const DEFAULT_GAME_SCAN_WAVE_SIZE = 300;
+const DEFAULT_GAME_SCAN_WAVE_SIZE = 250;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 5_000;
 const DEFAULT_POOL_TTL_MS = 12 * 60 * 60 * 1000;
@@ -108,10 +108,11 @@ const JAILBREAK_TRADE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 20;
 const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 8 * 60 * 1000;
-const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 500;
+const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 150;
 const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 1_200;
 const DEFAULT_TARGET_LIVE_CACHE_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_PRESENCE_API_BACKOFF_MS = 3 * 60 * 1000;
+const DEFAULT_FALLBACK_PRESENCE_BACKOFF_MS = 5 * 60 * 1000;
 const GROUP_SEARCH_TERMS_PER_REFRESH = 3;
 const GROUPS_PER_SEARCH_TERM = 2;
 const GROUP_MEMBERSHIP_SEEDS_PER_REFRESH = 4;
@@ -170,6 +171,7 @@ let liveTargetCursor = 0;
 let lastLiveCacheRefreshAt = 0;
 let liveCacheBackoffUntil = 0;
 let presenceApiBackoffUntil = 0;
+let fallbackPresenceBackoffUntil = 0;
 let discoveryApiBackoffUntil = 0;
 let searchTermCursor = 0;
 let groupSearchTermCursor = 0;
@@ -289,8 +291,14 @@ export function startTargetCandidatePoolWarmup() {
   };
 
   // Restore durable dedupe history before warming the verified index.
+  // Give candidate discovery time to settle, then seed the live cache before
+  // the slower recurring background loop begins.
   void ensureTargetHistoryHydrated()
-    .then(warmCandidates);
+    .then(warmCandidates)
+    .then(() => {
+      const initialLiveTimer = setTimeout(refreshLive, 30_000);
+      initialLiveTimer.unref?.();
+    });
 
   targetPoolWarmupTimer = setInterval(
     refreshCandidates,
@@ -2618,7 +2626,7 @@ export async function scanGameTargets({
             : []),
           "Roblox public collectibles inventory",
           "Rolimon's public player info/value enrichment",
-          ...(gameKey === "mm2"
+          ...(gameKey === "mm2" && includeGameValue
             ? ["RBLXValue profile/inventory enrichment when available"]
             : []),
         ]),
@@ -4380,19 +4388,42 @@ async function getPresenceBatchedUnlocked(
         const status = Number(error?.status);
         if (status === 429) {
           rateLimited = true;
-          presenceApiBackoffUntil = Math.max(
-            presenceApiBackoffUntil,
-            Date.now() +
-              getPositiveIntegerEnv(
-                "ROBLOX_PRESENCE_API_BACKOFF_MS",
-                DEFAULT_PRESENCE_API_BACKOFF_MS,
-              ),
-          );
-          console.warn(
-            "Roblox presence API rate-limited; entering shared backoff.",
-          );
+          const usingFallbackRoute =
+            presenceFetcher === getUsersPresenceFallback;
 
-          if (fallbackOnRateLimit && fallbackFetcher && pending.size > 0) {
+          if (usingFallbackRoute) {
+            fallbackPresenceBackoffUntil = Math.max(
+              fallbackPresenceBackoffUntil,
+              Date.now() +
+                getPositiveIntegerEnv(
+                  "ROBLOX_FALLBACK_PRESENCE_BACKOFF_MS",
+                  DEFAULT_FALLBACK_PRESENCE_BACKOFF_MS,
+                ),
+            );
+            console.warn(
+              "Public presence fallback rate-limited; entering fallback-only backoff.",
+            );
+          } else {
+            presenceApiBackoffUntil = Math.max(
+              presenceApiBackoffUntil,
+              Date.now() +
+                getPositiveIntegerEnv(
+                  "ROBLOX_PRESENCE_API_BACKOFF_MS",
+                  DEFAULT_PRESENCE_API_BACKOFF_MS,
+                ),
+            );
+            console.warn(
+              "Roblox presence API rate-limited; entering official-route backoff.",
+            );
+          }
+
+          if (
+            !usingFallbackRoute &&
+            fallbackOnRateLimit &&
+            fallbackFetcher &&
+            pending.size > 0 &&
+            Date.now() >= fallbackPresenceBackoffUntil
+          ) {
             try {
               const fallbackResult = await fallbackFetcher([...pending]);
               for (const presence of Array.isArray(fallbackResult)
@@ -4408,6 +4439,16 @@ async function getPresenceBatchedUnlocked(
               }
               if (resolved.size > 0) usedFallback = true;
             } catch (fallbackError) {
+              if (Number(fallbackError?.status) === 429) {
+                fallbackPresenceBackoffUntil = Math.max(
+                  fallbackPresenceBackoffUntil,
+                  Date.now() +
+                    getPositiveIntegerEnv(
+                      "ROBLOX_FALLBACK_PRESENCE_BACKOFF_MS",
+                      DEFAULT_FALLBACK_PRESENCE_BACKOFF_MS,
+                    ),
+                );
+              }
               console.warn(
                 "Secondary public presence route failed after Roblox 429:",
                 fallbackError,
@@ -4477,6 +4518,16 @@ async function getPresenceBatchedUnlocked(
           pending.delete(userId);
         }
       } catch (error) {
+        if (Number(error?.status) === 429) {
+          fallbackPresenceBackoffUntil = Math.max(
+            fallbackPresenceBackoffUntil,
+            Date.now() +
+              getPositiveIntegerEnv(
+                "ROBLOX_FALLBACK_PRESENCE_BACKOFF_MS",
+                DEFAULT_FALLBACK_PRESENCE_BACKOFF_MS,
+              ),
+          );
+        }
         console.warn("Secondary public presence route failed:", error);
       }
     }
