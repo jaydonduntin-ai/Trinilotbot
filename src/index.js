@@ -1,4 +1,4 @@
-import { Client, Events, GatewayIntentBits, REST, Routes } from "discord.js";
+import { MessageFlags, Client, Events, GatewayIntentBits, REST, Routes } from "discord.js";
 import { commandModules } from "./commands/index.js";
 import { startMonitoring } from "./monitoring/monitor-service.js";
 import { startTargetCandidatePoolWarmup } from "./monitoring/target-scanner.js";
@@ -135,7 +135,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const retryAfterSeconds = Math.ceil(rateLimit.retryAfterMs / 1000);
       await interaction.reply({
         content: `Please wait ${retryAfterSeconds} second${retryAfterSeconds === 1 ? "" : "s"} before using this command again.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -149,7 +149,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.editReply(message).catch(() => {});
     } else {
       await interaction
-        .reply({ content: message, ephemeral: true })
+        .reply({ content: message, flags: MessageFlags.Ephemeral })
         .catch(() => {});
     }
   }
