@@ -5,6 +5,7 @@ name: Preflight
 on:
   push:
     branches:
+      - "main"
       - "preflight/**"
   workflow_dispatch:
 
