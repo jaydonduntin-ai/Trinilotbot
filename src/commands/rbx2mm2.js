@@ -56,7 +56,9 @@ export const rbx2mm2Command = {
               : `Found ${result.players.length} public Roblox user${result.players.length === 1 ? "" : "s"} currently active in Murder Mystery 2 with ${minimumRap.toLocaleString()}+ RAP.`
             : result.presenceRateLimited && !result.presenceFallbackUsed
               ? "Roblox is rate-limiting live presence checks right now. No recent MM2 cache hit was available."
-              : `No ${minimumRap.toLocaleString()}+ RAP users currently active in Murder Mystery 2 were verified in this pass.`,
+              : result.scanComplete
+                ? `No ${minimumRap.toLocaleString()}+ RAP users active in Murder Mystery 2 were found after the completed index sweep.`
+                : `No MM2 match was found in the ${(result.presenceScannedCount ?? 0).toLocaleString()} users checked this pass. The next scan continues forward through the remaining verified index.`,
         embeds: batches[0] ?? [],
       });
 
@@ -83,12 +85,18 @@ function buildEmbeds(result) {
       [
         `Verified RAP index: ${result.verifiedRapIndexCount ?? 0}`,
         `Candidates checked this pass: ${result.presenceScannedCount ?? 0}`,
+        `In-game users seen: ${result.totalInGameSeen ?? 0}`,
         `MM2 active seen: ${result.gameActiveCount ?? 0}`,
         `Verified results: ${result.verifiedCount ?? 0}`,
         `Mode: ${result.liveCacheHit ? "live cache" : result.presenceFallbackUsed ? "public presence fallback" : result.presenceRateLimited ? "rate-limited" : "fresh presence"}`,
         !result.liveCacheHit && (result.verifiedRapIndexCount ?? 0) > 0
           ? `Coverage: ${Math.min(result.presenceScannedCount ?? 0, result.verifiedRapIndexCount ?? 0).toLocaleString()} / ${Number(result.verifiedRapIndexCount).toLocaleString()} indexed users this pass`
           : null,
+        result.scanComplete === false
+          ? "Sweep status: partial — next run resumes forward"
+          : result.scanComplete === true
+            ? "Sweep status: complete"
+            : null,
         `RAP threshold: ${Number(result.minimumRap ?? DEFAULT_TARGET_RAP).toLocaleString()}+`,
         `Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
       ].filter(Boolean).join("\n"),
