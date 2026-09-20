@@ -15,6 +15,8 @@ import {
 const DEFAULT_MM2_VALUE_WATCH_INTERVAL_MS = 2 * 60 * 1000;
 const PRESENCE_BATCH_SIZE = 50;
 let mm2ValueWatcherRunning = false;
+let mm2ValueDiscoveryBackoffUntil = 0;
+let mm2ZeroAvailabilityStreak = 0;
 
 export function startMm2ValueWatcher(client) {
   const intervalMs = readPositiveInteger(
@@ -41,15 +43,37 @@ export function startMm2ValueWatcher(client) {
 }
 
 async function runMm2ValueWatchCycle(client) {
-  const refresh = await refreshMm2ValueWatchCandidates().catch((error) => {
-    console.warn("MM2 background value-index refresh failed:", error);
-    return null;
-  });
+  let refresh = null;
 
-  if (refresh) {
-    console.info(
-      `MM2 value watch index: ${refresh.knownCount ?? 0} known · ${refresh.checked ?? 0} refreshed · ${refresh.persisted ?? 0} stored 50k+.`,
-    );
+  if (Date.now() >= mm2ValueDiscoveryBackoffUntil) {
+    refresh = await refreshMm2ValueWatchCandidates().catch((error) => {
+      console.warn("MM2 background value-index refresh failed:", error);
+      return null;
+    });
+
+    if (refresh) {
+      const checked = Number(refresh.checked ?? 0);
+      const available = Number(refresh.available ?? 0);
+
+      if (checked > 0 && available === 0) {
+        mm2ZeroAvailabilityStreak += 1;
+        const backoffMs = Math.min(
+          60 * 60 * 1000,
+          Math.max(
+            5 * 60 * 1000,
+            5 * 60 * 1000 * 2 ** (mm2ZeroAvailabilityStreak - 1),
+          ),
+        );
+        mm2ValueDiscoveryBackoffUntil = Date.now() + backoffMs;
+      } else if (available > 0) {
+        mm2ZeroAvailabilityStreak = 0;
+        mm2ValueDiscoveryBackoffUntil = 0;
+      }
+
+      console.info(
+        `MM2 value watch index: ${refresh.knownCount ?? 0} known · ${checked} refreshed · ${refresh.persisted ?? 0} stored 50k+${mm2ValueDiscoveryBackoffUntil > Date.now() ? ` · discovery backoff ${Math.ceil((mm2ValueDiscoveryBackoffUntil - Date.now()) / 60000)}m` : ""}.`,
+      );
+    }
   }
 
   const entries = await getMm2ValueWatchlist();
