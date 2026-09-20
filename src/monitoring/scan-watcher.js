@@ -3,7 +3,7 @@ import { getPresenceBatched } from "./target-scanner.js";
 import { getFollowUserJoinUrl } from "../roblox/game-session.js";
 import {
   getScanWatchlist,
-  updateScanPresence,
+  updateScanPresences,
 } from "../storage/scan-watchlist.js";
 
 const DEFAULT_SCAN_WATCH_INTERVAL_MS = 2 * 60 * 1000;
@@ -35,12 +35,15 @@ async function checkScanWatchlist(client) {
     maxAttempts: 1,
     interBatchDelayMs: 1_000,
     stopOnRateLimit: true,
+    priority: "background",
   });
   const presences = presenceScan.presences;
 
   const presenceById = new Map(
     presences.map((presence) => [Number(presence.userId), presence]),
   );
+
+  const updates = [];
 
   for (const entry of entries) {
     const presence = presenceById.get(Number(entry.userId));
@@ -52,7 +55,10 @@ async function checkScanWatchlist(client) {
         ? null
         : Number(entry.lastPresenceType);
 
-    const enteredGame = previousType !== null && previousType !== 2 && currentType === 2;
+    const enteredGame =
+      previousType !== null &&
+      previousType !== 2 &&
+      currentType === 2;
 
     if (enteredGame) {
       await publishScanAlert(client, entry, presence).catch((error) => {
@@ -63,10 +69,14 @@ async function checkScanWatchlist(client) {
       });
     }
 
-    await updateScanPresence(entry.userId, currentType, {
+    updates.push({
+      userId: entry.userId,
+      presenceType: currentType,
       alerted: enteredGame,
     });
   }
+
+  await updateScanPresences(updates);
 }
 
 async function publishScanAlert(client, entry, presence) {
