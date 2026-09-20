@@ -648,7 +648,19 @@ function countPoolMatches(ids) {
   return count;
 }
 
-export async function scanDiscoveredTargets({
+export async function scanDiscoveredTargets(options = {}) {
+  activeInteractivePresenceScans += 1;
+  try {
+    return await scanDiscoveredTargetsInternal(options);
+  } finally {
+    activeInteractivePresenceScans = Math.max(
+      0,
+      activeInteractivePresenceScans - 1,
+    );
+  }
+}
+
+async function scanDiscoveredTargetsInternal({
   minimumValue = null,
   minimumRap = getMinimumTargetRap(),
   limit = DEFAULT_TARGET_COUNT,
@@ -799,6 +811,7 @@ export async function scanDiscoveredTargets({
       belowValueCount: 0,
       rapUnavailableCount: 0,
       belowRapCount: 0,
+      presenceFallbackUsed: false,
       sources: discovery.sources,
       skipped: "No candidates were returned by the discovery routes.",
     };
@@ -814,6 +827,7 @@ export async function scanDiscoveredTargets({
   let rapUnavailableCount = 0;
   let belowRapCount = 0;
   let presenceRateLimited = false;
+  let presenceFallbackUsed = false;
   let profileUnavailableCount = 0;
   let verificationErrorCount = 0;
   const maxActiveToVerify = getPositiveIntegerEnv(
@@ -832,14 +846,28 @@ export async function scanDiscoveredTargets({
     if (verificationAttempts >= maxActiveToVerify) break;
 
     const wave = discovery.userIds.slice(offset, offset + waveSize);
+    const usingDirectFallback =
+      Date.now() < presenceApiBackoffUntil;
+
     const presenceScan = await getPresenceBatched(wave, {
       maxAttempts: 1,
       interBatchDelayMs: 1_000,
       stopOnRateLimit: true,
+      presenceFetcher: usingDirectFallback
+        ? getUsersPresenceFallback
+        : getUsersPresence,
+      fallbackFetcher: usingDirectFallback
+        ? null
+        : getUsersPresenceFallback,
+      fallbackOnRateLimit: !usingDirectFallback,
     });
     markCandidatesChecked(presenceScan.checkedIds);
     presenceScannedCount += presenceScan.checkedIds.length;
     if (presenceScan.rateLimited) presenceRateLimited = true;
+    presenceFallbackUsed =
+      presenceFallbackUsed ||
+      usingDirectFallback ||
+      presenceScan.usedFallback === true;
 
     const inGamePresences = presenceScan.presences
       .filter(
@@ -861,7 +889,20 @@ export async function scanDiscoveredTargets({
       activeSeen.set(Number(presence.userId), presence);
     }
 
-    if (presenceScan.rateLimited && inGamePresences.length === 0) {
+    if (
+      presenceScan.rateLimited &&
+      !presenceScan.usedFallback &&
+      !usingDirectFallback &&
+      inGamePresences.length === 0
+    ) {
+      continue;
+    }
+
+    if (
+      presenceScan.rateLimited &&
+      presenceScan.checkedIds.length === 0 &&
+      inGamePresences.length === 0
+    ) {
       break;
     }
 
@@ -943,6 +984,9 @@ export async function scanDiscoveredTargets({
     finalPresenceLeftGameCount: stillInGamePlayers.leftGameCount,
     finalPresenceUnavailableCount: stillInGamePlayers.unavailableCount,
     presenceRateLimited,
+    presenceFallbackUsed:
+      presenceFallbackUsed ||
+      stillInGamePlayers.usedFallback === true,
     usedCachedPresenceFallback: false,
     verificationAttempts,
     valueUnavailableCount,
@@ -4044,20 +4088,21 @@ async function revalidateCurrentlyInGame(players) {
     .map((player) => Number(player?.id))
     .filter((userId) => Number.isInteger(userId) && userId > 0);
 
-  if (Date.now() < presenceApiBackoffUntil) {
-    return {
-      players: [],
-      leftGameCount: 0,
-      unavailableCount: userIds.length,
-      rateLimited: true,
-    };
-  }
+  const usingDirectFallback =
+    Date.now() < presenceApiBackoffUntil;
 
   const check = await getPresenceBatched(userIds, {
     batchSize: FINAL_RECHECK_BATCH_SIZE,
     maxAttempts: 1,
     interBatchDelayMs: 500,
     stopOnRateLimit: true,
+    presenceFetcher: usingDirectFallback
+      ? getUsersPresenceFallback
+      : getUsersPresence,
+    fallbackFetcher: usingDirectFallback
+      ? null
+      : getUsersPresenceFallback,
+    fallbackOnRateLimit: !usingDirectFallback,
   });
 
   const presenceByUserId = new Map(
@@ -4110,6 +4155,8 @@ async function revalidateCurrentlyInGame(players) {
       (player) => !checkedIds.has(Number(player.id)),
     ).length,
     rateLimited: check.rateLimited === true,
+    usedFallback:
+      usingDirectFallback || check.usedFallback === true,
   };
 }
 
@@ -4182,7 +4229,13 @@ export async function getPresenceBatched(
     rateLimited = rateLimited || result.rateLimited === true;
     usedFallback = usedFallback || result.usedFallback === true;
 
-    if (result.rateLimited && stopOnRateLimit) break;
+    if (
+      result.rateLimited &&
+      stopOnRateLimit &&
+      result.checkedIds.length < chunk.length
+    ) {
+      break;
+    }
 
     if (
       index + batchSize < normalizedIds.length &&
