@@ -1,4 +1,5 @@
 import {
+  MessageFlags,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -55,7 +56,7 @@ export const robloxCommand = {
         if (buttonInteraction.user.id !== interaction.user.id) {
           await buttonInteraction.reply({
             content: "Only the user who ran /roblox can change these pages.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           return;
         }
