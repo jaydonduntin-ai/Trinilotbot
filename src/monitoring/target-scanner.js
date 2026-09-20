@@ -183,7 +183,9 @@ let lastCandidatePoolRefreshAt = 0;
 let mm2PresenceCursor = 0;
 let mm2ValueDiscoveryCursor = 0;
 let activeInteractivePresenceScans = 0;
-let presenceBatchQueue = Promise.resolve();
+const presenceInteractiveQueue = [];
+const presenceBackgroundQueue = [];
+let presenceSchedulerRunning = false;
 
 async function ensureTargetHistoryHydrated() {
   if (targetHistoryHydrated) return;
@@ -426,6 +428,7 @@ export async function refreshTargetLiveCache() {
       "ROBLOX_TARGET_LIVE_CACHE_BATCH_DELAY_MS",
       DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS,
     ),
+    priority: "background",
   });
   const checked = new Set(presenceScan.checkedIds.map(Number));
   const presenceById = new Map(
@@ -3909,18 +3912,130 @@ export async function getPresenceBatched(
   userIds,
   optionsOrFetcher = getUsersPresence,
 ) {
-  const run = presenceBatchQueue
-    .catch(() => undefined)
-    .then(() =>
-      getPresenceBatchedUnlocked(userIds, optionsOrFetcher),
+  const options =
+    typeof optionsOrFetcher === "function"
+      ? {}
+      : (optionsOrFetcher ?? {});
+  const priority =
+    options.priority === "background"
+      ? "background"
+      : "interactive";
+  const batchSize = Math.max(
+    1,
+    Number(options.batchSize) || PRESENCE_BATCH_SIZE,
+  );
+  const interBatchDelayMs = Math.max(
+    0,
+    Number(options.interBatchDelayMs) || 0,
+  );
+  const stopOnRateLimit = options.stopOnRateLimit !== false;
+
+  const normalizedIds = [
+    ...new Set(
+      (userIds ?? [])
+        .map(Number)
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+
+  if (normalizedIds.length === 0) {
+    return {
+      presences: [],
+      checkedIds: [],
+      rateLimited: false,
+      usedFallback: false,
+    };
+  }
+
+  const presences = [];
+  const checkedIds = [];
+  let rateLimited = false;
+  let usedFallback = false;
+
+  for (
+    let index = 0;
+    index < normalizedIds.length;
+    index += batchSize
+  ) {
+    const chunk = normalizedIds.slice(index, index + batchSize);
+    const chunkOptions =
+      typeof optionsOrFetcher === "function"
+        ? optionsOrFetcher
+        : {
+            ...options,
+            batchSize: chunk.length,
+            interBatchDelayMs: 0,
+          };
+
+    const result = await schedulePresenceTask(
+      () => getPresenceBatchedUnlocked(chunk, chunkOptions),
+      priority,
     );
 
-  presenceBatchQueue = run.then(
-    () => undefined,
-    () => undefined,
-  );
+    presences.push(...(result.presences ?? []));
+    checkedIds.push(...(result.checkedIds ?? []));
+    rateLimited = rateLimited || result.rateLimited === true;
+    usedFallback = usedFallback || result.usedFallback === true;
 
-  return run;
+    if (result.rateLimited && stopOnRateLimit) break;
+
+    if (
+      index + batchSize < normalizedIds.length &&
+      interBatchDelayMs > 0
+    ) {
+      await sleep(interBatchDelayMs);
+    }
+  }
+
+  return {
+    presences,
+    checkedIds: [...new Set(checkedIds)],
+    rateLimited,
+    usedFallback,
+  };
+}
+
+function schedulePresenceTask(task, priority = "interactive") {
+  return new Promise((resolve, reject) => {
+    const queue =
+      priority === "background"
+        ? presenceBackgroundQueue
+        : presenceInteractiveQueue;
+
+    queue.push({ task, resolve, reject });
+    void pumpPresenceScheduler();
+  });
+}
+
+async function pumpPresenceScheduler() {
+  if (presenceSchedulerRunning) return;
+  presenceSchedulerRunning = true;
+
+  try {
+    while (
+      presenceInteractiveQueue.length > 0 ||
+      presenceBackgroundQueue.length > 0
+    ) {
+      const job =
+        presenceInteractiveQueue.shift() ??
+        presenceBackgroundQueue.shift();
+
+      try {
+        job.resolve(await job.task());
+      } catch (error) {
+        job.reject(error);
+      }
+    }
+  } finally {
+    presenceSchedulerRunning = false;
+
+    if (
+      presenceInteractiveQueue.length > 0 ||
+      presenceBackgroundQueue.length > 0
+    ) {
+      void pumpPresenceScheduler();
+    }
+  }
 }
 
 async function getPresenceBatchedUnlocked(
