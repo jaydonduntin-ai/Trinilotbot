@@ -128,8 +128,8 @@ const MM2_PROFILE_CHECK_LIMIT = 24;
 const MM2_PROFILE_CONCURRENCY = 2;
 const MM2_SCAN_WAVE_SIZE = 300;
 const MM2_SCAN_TIME_BUDGET_MS = 45_000;
-const MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS = 90_000;
-const MM2_ACTIVITY_SWEEP_CHUNK_SIZE = 500;
+const MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS = 110_000;
+const MM2_ACTIVITY_SWEEP_CHUNK_SIZE = 450;
 const MM2_ACTIVITY_THROTTLE_PAUSE_MS = 12_000;
 
 const SEARCH_TERMS = [
@@ -1558,21 +1558,45 @@ export async function scanMm2JoinActivity({
 
       const incompleteChunk =
         presenceScan.checkedIds.length < chunk.length;
+      const proxyBacked =
+        usingDirectFallback || presenceScan.usedFallback === true;
 
+      if (incompleteChunk && presenceScan.rateLimited) {
+        const canPauseAgain =
+          throttlePauses < 3 &&
+          Date.now() - startedAt + MM2_ACTIVITY_THROTTLE_PAUSE_MS <
+            MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS;
+
+        if (!canPauseAgain) {
+          break;
+        }
+
+        throttlePauses += 1;
+        await sleep(MM2_ACTIVITY_THROTTLE_PAUSE_MS);
+
+        // Resume at the first unresolved part of this chunk instead of
+        // throwing away the rest of the verified index.
+        offset +=
+          presenceScan.checkedIds.length -
+          MM2_ACTIVITY_SWEEP_CHUNK_SIZE;
+        continue;
+      }
+
+      if (incompleteChunk) {
+        break;
+      }
+
+      // The public fallback commonly enforces a short rolling request window.
+      // Give it room between complete chunks so one command can sweep farther
+      // than the old ~500-user ceiling without immediately tripping 429.
       if (
-        incompleteChunk &&
-        presenceScan.rateLimited &&
+        proxyBacked &&
+        offset + MM2_ACTIVITY_SWEEP_CHUNK_SIZE < orderedIds.length &&
         Date.now() - startedAt + MM2_ACTIVITY_THROTTLE_PAUSE_MS <
           MM2_ACTIVITY_SWEEP_TIME_BUDGET_MS
       ) {
         throttlePauses += 1;
         await sleep(MM2_ACTIVITY_THROTTLE_PAUSE_MS);
-      }
-
-      if (incompleteChunk) {
-        // Advance only through IDs actually resolved; the next command resumes
-        // from the first unresolved region instead of pretending coverage.
-        break;
       }
     }
 
