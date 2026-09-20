@@ -3,10 +3,8 @@ import { commandModules } from "./commands/index.js";
 import { startMonitoring } from "./monitoring/monitor-service.js";
 import { startTargetCandidatePoolWarmup } from "./monitoring/target-scanner.js";
 import { startScanWatcher } from "./monitoring/scan-watcher.js";
-import { startMm2ValueWatcher } from "./monitoring/mm2-value-watcher.js";
 import { commandRateLimiter } from "./security/rate-limit.js";
 import { initializeAlertSubscriptions } from "./storage/alert-subscribers.js";
-import { initializeMm2ValueWatchlist } from "./storage/mm2-value-watchlist.js";
 import { startJoinBridge } from "./web/join-bridge.js";
 
 startJoinBridge();
@@ -34,7 +32,6 @@ const HEAVY_COMMAND_NAMES = new Set([
   "target",
   "scan",
   "rbx2mm2",
-  "rbx2mm2value",
 ]);
 const MAX_HEAVY_COMMANDS = readPositiveInteger(
   process.env.DISCORD_HEAVY_COMMAND_MAX_CONCURRENT,
@@ -86,22 +83,11 @@ client.once(Events.ClientReady, async (readyClient) => {
     );
   }
 
-  try {
-    await initializeMm2ValueWatchlist();
-    console.info("MM2 value watchlist storage initialized.");
-  } catch (error) {
-    console.error(
-      "MM2 value watchlist storage failed to initialize. Keeping the bot online:",
-      error,
-    );
-  }
-
   setTimeout(() => {
     startTargetCandidatePoolWarmup();
   }, 10_000);
 
   startScanWatcher(client);
-  startMm2ValueWatcher(client);
 
   try {
     await startMonitoring(client);
