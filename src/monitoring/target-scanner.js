@@ -165,6 +165,8 @@ let lastJailbreakTradeRefreshAt = 0;
 let limitedSeedCursor = 0;
 let candidateRefreshPromise = null;
 let lastCandidatePoolRefreshAt = 0;
+let mm2PresenceCursor = 0;
+let activeInteractivePresenceScans = 0;
 
 async function ensureTargetHistoryHydrated() {
   if (targetHistoryHydrated) return;
@@ -288,6 +290,15 @@ export async function refreshTargetLiveCache() {
   await syncWatchlistCandidates();
 
   const now = Date.now();
+  if (activeInteractivePresenceScans > 0) {
+    return {
+      verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
+      checkedCount: 0,
+      liveCount: liveTargetCache.size,
+      backingOff: false,
+      skippedForInteractive: true,
+    };
+  }
   if (now < liveCacheBackoffUntil || now < presenceApiBackoffUntil) {
     return {
       verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
@@ -1378,17 +1389,131 @@ export async function scanMm2JoinActivity({
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
   );
 
-  await syncWatchlistCandidates();
+  activeInteractivePresenceScans += 1;
+  try {
+    await syncWatchlistCandidates();
 
-  const cachedPresences = getFreshGameLiveCachePresences(game, {
-    minimumRap,
-    limit: requestedLimit,
-  });
+    const cachedPresences = getFreshGameLiveCachePresences(game, {
+      minimumRap,
+      limit: requestedLimit,
+    });
 
-  if (cachedPresences.length > 0) {
-    const cachedPlayers = (
+    if (cachedPresences.length > 0) {
+      const cachedPlayers = (
+        await mapWithConcurrency(
+          cachedPresences,
+          VERIFY_CONCURRENCY,
+          (presence) =>
+            buildDiscoveredTargetPlayer(presence, {
+              minimumValue: null,
+              minimumRap,
+              includeGameValue: false,
+            }).catch(() => null),
+        )
+      )
+        .filter((player) => player?.qualifies)
+        .map(({ qualifies, ...player }) => ({
+          ...player,
+          presenceFreshness: "recent",
+        }))
+        .slice(0, requestedLimit);
+
+      if (
+        cachedPlayers.length >= requestedLimit ||
+        Date.now() < presenceApiBackoffUntil
+      ) {
+        return {
+          gameKey: "mm2",
+          gameLabel: game.label,
+          universeId: game.universeId,
+          minimumValue: null,
+          minimumRap,
+          players: cachedPlayers,
+          candidateCount: candidatePool.size,
+          candidatePoolSize: candidatePool.size,
+          candidateSourceCounts: getPoolSourceCounts(),
+          verifiedRapIndexCount: getVerifiedRapCandidateIds(minimumRap).length,
+          presenceScannedCount: 0,
+          gameActiveCount: cachedPlayers.length,
+          verificationAttempts: cachedPlayers.length,
+          valueUnavailableCount: 0,
+          belowValueCount: 0,
+          rapUnavailableCount: 0,
+          belowRapCount: 0,
+          verifiedCount: cachedPlayers.length,
+          scanElapsedMs: 0,
+          liveCacheHit: true,
+          presenceRateLimited: Date.now() < presenceApiBackoffUntil,
+          sources: [
+            "Background verified RAP index",
+            "Background Roblox live-presence cache",
+            "Murder Mystery 2 activity filter",
+          ],
+        };
+      }
+    }
+
+    const verifiedIds = getVerifiedRapCandidateIds(minimumRap);
+    if (verifiedIds.length === 0) {
+      return {
+        gameKey: "mm2",
+        gameLabel: game.label,
+        universeId: game.universeId,
+        minimumValue: null,
+        minimumRap,
+        players: [],
+        candidateCount: candidatePool.size,
+        candidatePoolSize: candidatePool.size,
+        candidateSourceCounts: getPoolSourceCounts(),
+        verifiedRapIndexCount: 0,
+        presenceScannedCount: 0,
+        gameActiveCount: 0,
+        verificationAttempts: 0,
+        valueUnavailableCount: 0,
+        belowValueCount: 0,
+        rapUnavailableCount: 0,
+        belowRapCount: 0,
+        verifiedCount: 0,
+        scanElapsedMs: 0,
+        liveCacheHit: false,
+        presenceRateLimited: false,
+        sources: [
+          "Verified RAP index",
+          "Roblox public live presence",
+          "Murder Mystery 2 activity filter",
+        ],
+      };
+    }
+
+    const scanLimit = Math.min(
+      verifiedIds.length,
+      getPositiveIntegerEnv("ROBLOX_MM2_PRESENCE_SCAN_LIMIT", 650),
+    );
+    const start = mm2PresenceCursor % verifiedIds.length;
+    const scanIds = [];
+    for (let offset = 0; offset < scanLimit; offset += 1) {
+      scanIds.push(verifiedIds[(start + offset) % verifiedIds.length]);
+    }
+
+    const startedAt = Date.now();
+    const presenceScan = await getPresenceBatched(scanIds, {
+      maxAttempts: 1,
+      interBatchDelayMs: 900,
+      stopOnRateLimit: true,
+    });
+
+    const checkedCount = presenceScan.checkedIds.length;
+    mm2PresenceCursor =
+      (start + Math.max(checkedCount, PRESENCE_BATCH_SIZE)) %
+      verifiedIds.length;
+
+    const mm2Presences = presenceScan.presences.filter((presence) =>
+      isPresenceForGame(presence, game),
+    );
+
+    const players = (
       await mapWithConcurrency(
-        cachedPresences,
+        mm2Presences.slice(0, requestedLimit),
         VERIFY_CONCURRENCY,
         (presence) =>
           buildDiscoveredTargetPlayer(presence, {
@@ -1401,93 +1526,67 @@ export async function scanMm2JoinActivity({
       .filter((player) => player?.qualifies)
       .map(({ qualifies, ...player }) => ({
         ...player,
-        presenceFreshness: "recent",
+        presenceFreshness: "fresh",
       }))
       .slice(0, requestedLimit);
 
-    if (
-      cachedPlayers.length >= requestedLimit ||
-      Date.now() < presenceApiBackoffUntil
-    ) {
-      return {
-        gameKey: "mm2",
-        gameLabel: game.label,
-        universeId: game.universeId,
-        minimumValue: null,
-        minimumRap,
-        players: cachedPlayers,
-        candidateCount: candidatePool.size,
-        candidatePoolSize: candidatePool.size,
-        candidateSourceCounts: getPoolSourceCounts(),
-        presenceScannedCount: 0,
-        gameActiveCount: cachedPlayers.length,
-        verificationAttempts: cachedPlayers.length,
-        valueUnavailableCount: 0,
-        belowValueCount: 0,
-        rapUnavailableCount: 0,
-        belowRapCount: 0,
-        verifiedCount: cachedPlayers.length,
-        scanElapsedMs: 0,
-        liveCacheHit: true,
-        presenceRateLimited: Date.now() < presenceApiBackoffUntil,
-        sources: [
-          "Background verified RAP index",
-          "Background Roblox live-presence cache",
-          "Murder Mystery 2 activity filter",
-        ],
-      };
-    }
-  }
-
-  const fresh = await scanGameTargets({
-    gameKey: "mm2",
-    minimumValue: null,
-    minimumRap,
-    limit: requestedLimit,
-    includeGameValue: false,
-  });
-
-  if (cachedPresences.length === 0) {
     return {
-      ...fresh,
+      gameKey: "mm2",
+      gameLabel: game.label,
+      universeId: game.universeId,
+      minimumValue: null,
+      minimumRap,
+      players,
+      candidateCount: candidatePool.size,
+      candidatePoolSize: candidatePool.size,
+      candidateSourceCounts: getPoolSourceCounts(),
+      verifiedRapIndexCount: verifiedIds.length,
+      presenceScannedCount: checkedCount,
+      gameActiveCount: mm2Presences.length,
+      verificationAttempts: players.length,
+      valueUnavailableCount: 0,
+      belowValueCount: 0,
+      rapUnavailableCount: 0,
+      belowRapCount: 0,
+      verifiedCount: players.length,
+      scanElapsedMs: Date.now() - startedAt,
       liveCacheHit: false,
-      presenceRateLimited:
-        fresh.presenceScannedCount === 0 &&
-        Date.now() < presenceApiBackoffUntil,
+      presenceRateLimited: presenceScan.rateLimited === true,
+      scanCursorStart: start,
+      scanCursorNext: mm2PresenceCursor,
+      sources: [
+        "Verified RAP index",
+        "Roblox public live presence",
+        "Murder Mystery 2 universe/activity filter",
+      ],
     };
+  } finally {
+    activeInteractivePresenceScans = Math.max(
+      0,
+      activeInteractivePresenceScans - 1,
+    );
   }
+}
 
-  const cachedPlayers = (
-    await mapWithConcurrency(
-      cachedPresences,
-      VERIFY_CONCURRENCY,
-      (presence) =>
-        buildDiscoveredTargetPlayer(presence, {
-          minimumValue: null,
-          minimumRap,
-          includeGameValue: false,
-        }).catch(() => null),
+function getVerifiedRapCandidateIds(minimumRap) {
+  return [...candidatePool.values()]
+    .filter(
+      (candidate) =>
+        Number.isFinite(Number(candidate?.lastKnownRap)) &&
+        Number(candidate.lastKnownRap) >= Number(minimumRap),
     )
-  ).filter((player) => player?.qualifies);
-
-  const merged = new Map();
-  for (const player of [...cachedPlayers, ...(fresh.players ?? [])]) {
-    const id = Number(player?.id);
-    if (Number.isInteger(id) && id > 0 && !merged.has(id)) {
-      merged.set(id, player);
-    }
-  }
-
-  return {
-    ...fresh,
-    players: [...merged.values()].slice(0, requestedLimit),
-    verifiedCount: Math.min(requestedLimit, merged.size),
-    liveCacheHit: cachedPlayers.length > 0,
-    gameActiveCount: Math.max(
-      fresh.gameActiveCount ?? 0,
-      cachedPlayers.length,
-    ),
-  };
+    .sort(
+      (left, right) =>
+        getCandidatePriority(
+          right,
+          { minimumValue: null, minimumRap },
+        ) -
+        getCandidatePriority(
+          left,
+          { minimumValue: null, minimumRap },
+        ),
+    )
+    .map((candidate) => Number(candidate.userId));
 }
 
 export async function scanGameTargets({
