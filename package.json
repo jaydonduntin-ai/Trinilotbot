@@ -9,7 +9,7 @@
     "check": "node scripts/check-project.js"
   },
   "dependencies": {
-    "discord.js": "^14.25.1"
+    "discord.js": "14.25.1"
   },
   "description": "Discord bot for public Roblox profile, limited-owner, and verified account-link lookups.",
   "engines": {
