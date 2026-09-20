@@ -49,6 +49,9 @@ export const rbx2mm2Command = {
       interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
     await interaction.deferReply({ ephemeral: true });
+    await interaction.editReply(
+      `Scanning live MM2 activity and checking ${minimumMm2Value.toLocaleString()}+ MM2 value…`,
+    );
 
     try {
       const result = await scanMm2JoinActivity({
