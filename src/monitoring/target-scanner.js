@@ -1673,7 +1673,7 @@ export async function scanMm2JoinActivity({
         presenceRateLimited || presenceScan.rateLimited === true;
       presenceFallbackUsed =
         presenceFallbackUsed ||
-        (route.usingFallback && presenceScan.checkedIds.length > 0) ||
+        usingDirectFallback ||
         presenceScan.usedFallback === true;
 
       const inGamePresences = presenceScan.presences.filter(
@@ -2503,7 +2503,7 @@ export async function scanGameTargets({
         presenceRateLimited || presenceScan.rateLimited === true;
       presenceFallbackUsed =
         presenceFallbackUsed ||
-        usingDirectFallback ||
+        (route.usingFallback && presenceScan.checkedIds.length > 0) ||
         presenceScan.usedFallback === true;
 
       const gamePresences = presenceScan.presences
@@ -4246,6 +4246,24 @@ export async function getPresenceBatched(
     ),
   ];
 
+  const configuredFetcher =
+    typeof optionsOrFetcher === "function"
+      ? optionsOrFetcher
+      : options.presenceFetcher ?? getUsersPresence;
+
+  if (
+    priority === "background" &&
+    configuredFetcher === getUsersPresence &&
+    Date.now() < presenceApiBackoffUntil
+  ) {
+    return {
+      presences: [],
+      checkedIds: [],
+      rateLimited: true,
+      usedFallback: false,
+    };
+  }
+
   if (normalizedIds.length === 0) {
     return {
       presences: [],
@@ -4259,6 +4277,7 @@ export async function getPresenceBatched(
   const checkedIds = [];
   let rateLimited = false;
   let usedFallback = false;
+  let forceFallbackForRemaining = false;
 
   for (
     let index = 0;
@@ -4266,14 +4285,31 @@ export async function getPresenceBatched(
     index += batchSize
   ) {
     const chunk = normalizedIds.slice(index, index + batchSize);
-    const chunkOptions =
+    const baseOptions =
       typeof optionsOrFetcher === "function"
-        ? optionsOrFetcher
+        ? null
         : {
             ...options,
             batchSize: chunk.length,
             interBatchDelayMs: 0,
           };
+
+    const canForceFallback =
+      forceFallbackForRemaining &&
+      typeof baseOptions?.fallbackFetcher === "function" &&
+      Date.now() >= fallbackPresenceBackoffUntil;
+
+    const chunkOptions =
+      typeof optionsOrFetcher === "function"
+        ? optionsOrFetcher
+        : canForceFallback
+          ? {
+              ...baseOptions,
+              presenceFetcher: baseOptions.fallbackFetcher,
+              fallbackFetcher: null,
+              fallbackOnRateLimit: false,
+            }
+          : baseOptions;
 
     const result = await schedulePresenceTask(
       () => getPresenceBatchedUnlocked(chunk, chunkOptions),
@@ -4283,7 +4319,20 @@ export async function getPresenceBatched(
     presences.push(...(result.presences ?? []));
     checkedIds.push(...(result.checkedIds ?? []));
     rateLimited = rateLimited || result.rateLimited === true;
-    usedFallback = usedFallback || result.usedFallback === true;
+    usedFallback =
+      usedFallback ||
+      canForceFallback ||
+      result.usedFallback === true;
+
+    if (
+      !canForceFallback &&
+      result.rateLimited &&
+      result.usedFallback &&
+      result.checkedIds.length === chunk.length &&
+      typeof baseOptions?.fallbackFetcher === "function"
+    ) {
+      forceFallbackForRemaining = true;
+    }
 
     if (
       result.rateLimited &&
