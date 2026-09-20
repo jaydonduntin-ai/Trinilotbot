@@ -1,10 +1,17 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const storagePath = fileURLToPath(
-  new URL("../../data/alert-subscribers.json", import.meta.url),
-);
+const railwayVolumePath =
+  process.env.RAILWAY_VOLUME_MOUNT_PATH?.trim() || null;
+
+const storagePath =
+  process.env.ROBLOX_ALERT_SUBSCRIBERS_PATH?.trim() ||
+  (railwayVolumePath
+    ? join(railwayVolumePath, "alert-subscribers.json")
+    : fileURLToPath(
+        new URL("../../data/alert-subscribers.json", import.meta.url),
+      ));
 
 let subscribers = new Set();
 let initialized = false;
