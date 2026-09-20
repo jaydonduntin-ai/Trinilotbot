@@ -7,8 +7,10 @@ import {
 } from "../storage/scan-watchlist.js";
 
 const DEFAULT_SCAN_WATCH_INTERVAL_MS = 2 * 60 * 1000;
+const DEFAULT_SCAN_WATCH_USERS_PER_CYCLE = 50;
 const PRESENCE_BATCH_SIZE = 50;
 let scanWatcherRunning = false;
+let scanWatcherCursor = 0;
 
 export async function startScanWatcher(client) {
   const intervalMs = readPositiveInteger(
@@ -29,7 +31,8 @@ export async function startScanWatcher(client) {
     }
   };
 
-  setTimeout(run, 15_000);
+  const initialTimer = setTimeout(run, 75_000);
+  initialTimer.unref?.();
   const interval = setInterval(run, intervalMs);
   interval.unref?.();
 }
@@ -38,7 +41,28 @@ async function checkScanWatchlist(client) {
   const entries = await getScanWatchlist();
   if (entries.length === 0) return;
 
-  const ids = entries.map((entry) => entry.userId);
+  const usersPerCycle = Math.max(
+    1,
+    Math.min(
+      entries.length,
+      readPositiveInteger(
+        process.env.ROBLOX_SCAN_WATCH_USERS_PER_CYCLE,
+        DEFAULT_SCAN_WATCH_USERS_PER_CYCLE,
+      ),
+    ),
+  );
+  const start = scanWatcherCursor % entries.length;
+  const selectedEntries = [];
+
+  for (let offset = 0; offset < usersPerCycle; offset += 1) {
+    selectedEntries.push(
+      entries[(start + offset) % entries.length],
+    );
+  }
+  scanWatcherCursor =
+    (start + selectedEntries.length) % entries.length;
+
+  const ids = selectedEntries.map((entry) => entry.userId);
   const presenceScan = await getPresenceBatched(ids, {
     batchSize: PRESENCE_BATCH_SIZE,
     maxAttempts: 1,
@@ -54,7 +78,7 @@ async function checkScanWatchlist(client) {
 
   const updates = [];
 
-  for (const entry of entries) {
+  for (const entry of selectedEntries) {
     const presence = presenceById.get(Number(entry.userId));
     if (!presence) continue;
 
