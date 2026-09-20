@@ -73,9 +73,11 @@ export const targetsCommand = {
         result.players.length > 0
           ? result.usedCachedPresenceFallback
             ? `Found ${result.players.length} recently verified in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}. Roblox is rate-limiting fresh presence checks, so these are from the recent live cache.`
-            : `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}.`
-          : result.presenceRateLimited
-            ? "Roblox is rate-limiting live presence checks right now. No fresh cached target was available for this pass."
+            : result.presenceFallbackUsed
+              ? `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)} using the public presence fallback.`
+              : `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}.`
+          : result.presenceRateLimited && !result.presenceFallbackUsed
+            ? "Roblox is rate-limiting live presence checks right now, and no usable fallback/cache result was available for this pass."
             : `No currently in-game public profile matching ${formatThresholds(result)} was verified in this discovery pass.`;
 
       await interaction.editReply({
@@ -108,9 +110,11 @@ function buildTargetEmbeds(result) {
         `Live cache: ${result.liveCacheSize ?? 0} · Cache hit: ${result.liveCacheHit ? "Yes" : "No"}`,
         result.usedCachedPresenceFallback
           ? "Presence mode: recent cache (Roblox rate-limited)"
-          : result.presenceRateLimited
-            ? "Presence mode: rate-limited"
-            : "Presence mode: fresh",
+          : result.presenceFallbackUsed
+            ? "Presence mode: public fallback"
+            : result.presenceRateLimited
+              ? "Presence mode: rate-limited"
+              : "Presence mode: fresh",
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
         `Join-ready: ${result.joinReadyCount ?? 0} · Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
