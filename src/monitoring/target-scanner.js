@@ -1046,32 +1046,47 @@ export async function scanCandidatesForWatchlist({
 
     const batch = candidates.slice(index, index + VERIFY_CONCURRENCY);
     checkedCount += batch.length;
-    for (const userId of batch) {
-      attemptedIds.add(Number(userId));
-      newAttemptIds.push(Number(userId));
-    }
 
     const results = await Promise.all(
-      batch.map((userId) =>
-        buildDiscoveredTargetPlayer(
-          {
-            userId,
-            userPresenceType: 0,
-            lastLocation: null,
-            universeId: null,
-          },
-          { minimumValue, minimumRap },
-        ).catch((error) => {
+      batch.map(async (userId) => {
+        try {
+          const player = await buildDiscoveredTargetPlayer(
+            {
+              userId,
+              userPresenceType: 0,
+              lastLocation: null,
+              universeId: null,
+            },
+            { minimumValue, minimumRap },
+          );
+          return { userId: Number(userId), player };
+        } catch (error) {
           console.warn(
             `Scan watchlist verification failed for Roblox user ${userId}:`,
             error,
           );
-          return null;
-        }),
-      ),
+          return {
+            userId: Number(userId),
+            player: {
+              qualifies: false,
+              reason: "verification-error",
+            },
+          };
+        }
+      }),
     );
 
-    for (const player of results) {
+    for (const { userId, player } of results) {
+      const definitive =
+        player?.qualifies === true ||
+        player?.reason === "below-rap" ||
+        player?.reason === "below-value";
+
+      if (definitive) {
+        attemptedIds.add(userId);
+        newAttemptIds.push(userId);
+      }
+
       if (player?.qualifies) {
         verified.push(player);
         if (verified.length >= requestedLimit) break;
