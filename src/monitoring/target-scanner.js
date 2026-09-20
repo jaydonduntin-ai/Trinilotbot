@@ -167,6 +167,7 @@ let candidateRefreshPromise = null;
 let lastCandidatePoolRefreshAt = 0;
 let mm2PresenceCursor = 0;
 let activeInteractivePresenceScans = 0;
+let presenceBatchQueue = Promise.resolve();
 
 async function ensureTargetHistoryHydrated() {
   if (targetHistoryHydrated) return;
@@ -3270,6 +3271,24 @@ async function revalidateCurrentlyInGame(players) {
 }
 
 export async function getPresenceBatched(
+  userIds,
+  optionsOrFetcher = getUsersPresence,
+) {
+  const run = presenceBatchQueue
+    .catch(() => undefined)
+    .then(() =>
+      getPresenceBatchedUnlocked(userIds, optionsOrFetcher),
+    );
+
+  presenceBatchQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return run;
+}
+
+async function getPresenceBatchedUnlocked(
   userIds,
   optionsOrFetcher = getUsersPresence,
 ) {
