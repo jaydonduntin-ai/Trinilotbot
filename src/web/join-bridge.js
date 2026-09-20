@@ -27,13 +27,6 @@ export function startJoinBridge() {
           return sendNotFound(res);
         }
 
-        const directWebJoin =
-          `https://www.roblox.com/games/start?userId=${encodeURIComponent(userId)}`;
-
-        if (isDesktopRequest(req)) {
-          return sendRedirect(res, directWebJoin);
-        }
-
         return sendJoinPage(res, {
           title: "Join Roblox player",
           appUrl: `roblox://userId=${encodeURIComponent(userId)}`,
@@ -54,14 +47,6 @@ export function startJoinBridge() {
           return sendNotFound(res);
         }
 
-        const directWebJoin =
-          `https://www.roblox.com/games/start?placeId=${encodeURIComponent(placeId)}` +
-          `&gameInstanceId=${encodeURIComponent(gameId)}`;
-
-        if (isDesktopRequest(req)) {
-          return sendRedirect(res, directWebJoin);
-        }
-
         return sendJoinPage(res, {
           title: "Join Roblox server",
           appUrl:
@@ -78,13 +63,6 @@ export function startJoinBridge() {
         const placeId = Number(gameMatch[1]);
         if (!Number.isInteger(placeId) || placeId <= 0) {
           return sendNotFound(res);
-        }
-
-        const directWebJoin =
-          `https://www.roblox.com/games/start?placeId=${encodeURIComponent(placeId)}`;
-
-        if (isDesktopRequest(req)) {
-          return sendRedirect(res, directWebJoin);
         }
 
         return sendJoinPage(res, {
@@ -145,15 +123,13 @@ function sendJoinPage(
 <body>
   <main>
     <h1>${safeTitle}</h1>
-    <p>Opening the Roblox app…</p>
-    <a id="open-roblox" class="primary" href="${safeAppUrl}">Open Roblox</a>
+    <p>Launching Roblox directly…</p>
+    <a id="open-roblox" class="primary" href="${safeAppUrl}">Launch Roblox</a>
     <a class="secondary" href="${safeFallbackUrl}">${safeFallbackLabel}</a>
-    <small>If iOS blocks the automatic handoff, tap <b>Open Roblox</b>. This page never sends you to the App Store.</small>
+    <small>If your browser blocks the automatic handoff, click <b>Launch Roblox</b>. The fallback opens the Roblox profile/experience instead of a legacy 404 route.</small>
   </main>
   <script>
-    setTimeout(() => {
-      window.location.href = ${JSON.stringify(appUrl)};
-    }, 80);
+    window.location.href = ${JSON.stringify(appUrl)};
   </script>
 </body>
 </html>`;
@@ -167,21 +143,6 @@ function sendJoinPage(
   res.end(html);
 }
 
-function isDesktopRequest(req) {
-  const userAgent = String(req.headers["user-agent"] ?? "").toLowerCase();
-  const mobilePattern =
-    /iphone|ipad|ipod|android|mobile|windows phone|opera mini|iemobile/;
-  return !mobilePattern.test(userAgent);
-}
-
-function sendRedirect(res, location) {
-  res.writeHead(302, {
-    Location: location,
-    "Cache-Control": "no-store, max-age=0",
-    "Referrer-Policy": "no-referrer",
-  });
-  res.end();
-}
 
 function sendNotFound(res) {
   res.writeHead(404, {
