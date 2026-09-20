@@ -63,8 +63,10 @@ export const rbx2mm2ValueCommand = {
             ? `Found ${result.players.length} current MM2 player${result.players.length === 1 ? "" : "s"} with verified MM2 inventory value of ${minimumMm2Value.toLocaleString()}+.`
             : result.presenceRateLimited && !result.presenceFallbackUsed
               ? "Roblox is rate-limiting live presence checks right now."
+              : result.mm2IndexTransientFailure
+              ? "Roblox temporarily rate-limited username resolution for this MM2-value pass. No candidates were discarded; the next pass will retry them."
               : (result.mm2ValueIndexQualifiedCount ?? 0) === 0
-                ? `No ${minimumMm2Value.toLocaleString()}+ MM2-value profile is indexed yet. This pass checked ${Number(result.mm2ProfilesCheckedThisPass ?? 0).toLocaleString()} more candidates through RBLXValue; the next run continues building the index.`
+                ? `No ${minimumMm2Value.toLocaleString()}+ MM2-value profile is indexed yet. This pass checked ${Number(result.mm2ProfilesCheckedThisPass ?? 0).toLocaleString()} profiles through RBLXValue; the next run continues building the index.`
                 : result.scanComplete
                   ? `No indexed ${minimumMm2Value.toLocaleString()}+ MM2-value player is currently active in MM2.`
                   : `No live MM2 match was found among the indexed ${minimumMm2Value.toLocaleString()}+ value users checked this pass. The next scan continues forward.`,
@@ -98,6 +100,10 @@ function buildEmbeds(result) {
         `New MM2 profiles checked: ${Number(result.mm2ProfilesCheckedThisPass ?? 0).toLocaleString()}`,
         `Profile values available: ${Number(result.mm2ProfilesAvailableThisPass ?? 0).toLocaleString()}`,
         `Profile values unavailable: ${Number(result.mm2ProfilesUnavailableThisPass ?? 0).toLocaleString()}`,
+        `Username resolution unavailable: ${Number(result.mm2UsernameResolutionUnavailable ?? 0).toLocaleString()}`,
+        result.mm2IndexTransientFailure
+          ? "Index pass status: temporary Roblox API backoff — candidates retained"
+          : null,
         `Indexed users presence-checked: ${Number(result.presenceScannedCount ?? 0).toLocaleString()}`,
         `In-game users seen: ${result.totalInGameSeen ?? 0}`,
         `MM2 active seen: ${result.gameActiveCount ?? 0}`,
@@ -107,7 +113,7 @@ function buildEmbeds(result) {
         `Mode: ${result.liveCacheHit ? "live cache" : result.presenceFallbackUsed ? "public presence fallback" : result.presenceRateLimited ? "rate-limited" : "fresh presence"}`,
         "Background MM2 watch: enabled for this channel",
         `Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
-      ].join("\n"),
+      ].filter(Boolean).join("\n"),
     )
     .addFields({
       name: "Verification source",
