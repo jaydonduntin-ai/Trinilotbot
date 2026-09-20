@@ -1,4 +1,4 @@
-import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_RAP,
   MIN_TARGET_THRESHOLD,
@@ -41,7 +41,7 @@ export const scanCommand = {
     const limit =
       interaction.options.getInteger("limit") ?? DEFAULT_SCAN_LIMIT;
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       const result = await scanCandidatesForWatchlist({
