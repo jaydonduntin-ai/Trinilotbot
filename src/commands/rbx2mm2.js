@@ -7,13 +7,13 @@ import {
   scanMm2RapActivity,
 } from "../monitoring/target-scanner.js";
 
-const MIN_MM2_RAP = 150_000;
+const MIN_MM2_RAP = 450_000;
 
 export const rbx2mm2Command = {
   definition: new SlashCommandBuilder()
     .setName("rbx2mm2")
     .setDescription(
-      "Find 150K+ RAP Roblox users currently playing Murder Mystery 2.",
+      "Find 450K+ RAP Roblox users currently playing Murder Mystery 2.",
     )
     .addIntegerOption((option) =>
       option
@@ -100,7 +100,7 @@ function buildEmbeds(result) {
     .addFields({
       name: "Sources",
       value:
-        "Same SE TARG discovery streams + Roblox live presence + public Roblox/Rolimon's RAP verification. MM2 inventory value is not used by this command.",
+        "Same SE TARG discovery streams + Roblox live presence + public Roblox/Rolimon's RAP verification. RAP-only: no MM2 inventory/value lookup is used.",
       inline: false,
     })
     .setTimestamp();
