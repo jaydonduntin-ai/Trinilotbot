@@ -71,8 +71,12 @@ export const targetsCommand = {
       const embedBatches = batchEmbedsForDiscord(embeds);
       const content =
         result.players.length > 0
-          ? `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}.`
-          : `No currently in-game public profile matching ${formatThresholds(result)} was verified in this discovery pass.`;
+          ? result.usedCachedPresenceFallback
+            ? `Found ${result.players.length} recently verified in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}. Roblox is rate-limiting fresh presence checks, so these are from the recent live cache.`
+            : `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}.`
+          : result.presenceRateLimited
+            ? "Roblox is rate-limiting live presence checks right now. No fresh cached target was available for this pass."
+            : `No currently in-game public profile matching ${formatThresholds(result)} was verified in this discovery pass.`;
 
       await interaction.editReply({
         content,
@@ -102,6 +106,11 @@ function buildTargetEmbeds(result) {
       [
         `Verified 450k+ index: ${result.verifiedIndexCount ?? 0}`,
         `Live cache: ${result.liveCacheSize ?? 0} · Cache hit: ${result.liveCacheHit ? "Yes" : "No"}`,
+        result.usedCachedPresenceFallback
+          ? "Presence mode: recent cache (Roblox rate-limited)"
+          : result.presenceRateLimited
+            ? "Presence mode: rate-limited"
+            : "Presence mode: fresh",
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
         `Join-ready: ${result.joinReadyCount ?? 0} · Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
