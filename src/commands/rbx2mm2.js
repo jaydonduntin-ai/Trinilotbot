@@ -58,7 +58,7 @@ export const rbx2mm2Command = {
         content:
           result.players.length > 0
             ? `Found ${result.players.length} Murder Mystery 2 player${result.players.length === 1 ? "" : "s"} with ${minimumRap.toLocaleString()}+ Roblox RAP.`
-            : result.presenceRateLimited
+            : result.presenceRateLimited && !result.presenceFallbackUsed
               ? "Roblox is rate-limiting live presence checks right now."
               : `No current MM2 player with ${minimumRap.toLocaleString()}+ Roblox RAP was verified in this pass.`,
         embeds: batches[0] ?? [],
@@ -92,6 +92,7 @@ function buildEmbeds(result) {
         `Below RAP: ${result.belowRapCount ?? 0}`,
         `RAP unavailable: ${result.rapUnavailableCount ?? 0}`,
         `Verified results: ${result.verifiedCount ?? 0}`,
+        `Mode: ${result.liveCacheHit ? "MM2 live cache" : result.presenceFallbackUsed ? "public presence fallback" : result.presenceRateLimited ? "rate-limited" : "fresh Roblox presence"}`,
         `Roblox RAP threshold: ${Number(result.minimumRap ?? DEFAULT_MM2_RAP).toLocaleString()}+`,
         `Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
       ].join("\n"),
