@@ -1,4 +1,4 @@
-import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_COUNT,
   DEFAULT_TARGET_RAP,
@@ -58,7 +58,7 @@ export const targetsCommand = {
       minimumRapOption ??
       (minimumValueOption === null ? DEFAULT_TARGET_RAP : null);
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       const result = await scanDiscoveredTargets({
@@ -86,7 +86,7 @@ export const targetsCommand = {
       for (const batch of embedBatches.slice(1)) {
         await interaction.followUp({
           embeds: batch,
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
     } catch (error) {
