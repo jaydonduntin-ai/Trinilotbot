@@ -1784,8 +1784,20 @@ async function refreshMm2ValueIndex({
       }
 
       try {
+        const robloxUser = await getRobloxUserById(userId);
+        const username = String(robloxUser?.name ?? "").trim();
+
+        if (!username) {
+          candidate.lastKnownMm2ValueAt = Date.now();
+          candidate.lastKnownMm2Value = null;
+          candidate.lastKnownMm2ItemCount = null;
+          candidate.lastKnownMm2ValueSource =
+            "RBLXValue API v2 profile";
+          return { userId, available: false };
+        }
+
         const profile = await getRblxValueProfile({
-          userId,
+          username,
           requestTimeoutMs: 3_500,
           maxRetries: 0,
         });
@@ -1813,6 +1825,8 @@ async function refreshMm2ValueIndex({
 
         return {
           userId,
+          username,
+          displayName: robloxUser?.displayName ?? null,
           available: true,
           qualifies:
             Number(profile.totalValue) >= Number(minimumMm2Value),
@@ -1848,6 +1862,8 @@ async function refreshMm2ValueIndex({
     )
     .map((result) => ({
       userId: result.userId,
+      username: result.username ?? null,
+      displayName: result.displayName ?? null,
       mm2Value: Number(result.mm2Value),
       mm2ItemCount: result.mm2ItemCount ?? null,
       mm2ValueSource:
@@ -1902,8 +1918,9 @@ function getIndexedMm2ValueCandidateIds({
       }
 
       if (
-        !Number.isFinite(Number(candidate?.lastKnownMm2Value)) ||
-        Number(candidate.lastKnownMm2Value) <
+        typeof candidate?.lastKnownMm2Value !== "number" ||
+        !Number.isFinite(candidate.lastKnownMm2Value) ||
+        candidate.lastKnownMm2Value <
           Number(minimumMm2Value)
       ) {
         return false;
@@ -1940,7 +1957,8 @@ function getKnownMm2ValueCandidateCount() {
     return (
       checkedAt > 0 &&
       now - checkedAt < MM2_VALUE_INDEX_TTL_MS &&
-      Number.isFinite(Number(candidate?.lastKnownMm2Value))
+      typeof candidate?.lastKnownMm2Value === "number" &&
+      Number.isFinite(candidate.lastKnownMm2Value)
     );
   }).length;
 }
@@ -2001,10 +2019,15 @@ async function buildMm2ValueTarget(
     Date.now() - Number(candidate.lastKnownMm2ValueAt) <
       MM2_VALUE_INDEX_TTL_MS;
 
+  const userPromise = getRobloxUserById(userId);
+  const avatarPromise = getAvatarThumbnail(userId);
+  const userForProfile = await userPromise.catch(() => null);
+  const usernameForProfile = String(userForProfile?.name ?? "").trim();
+
   const [userResult, avatarResult, mm2ProfileResult] =
     await Promise.allSettled([
-      getRobloxUserById(userId),
-      getAvatarThumbnail(userId),
+      Promise.resolve(userForProfile),
+      avatarPromise,
       hasFreshIndexedMm2Value
         ? Promise.resolve({
             status: "verified",
@@ -2016,11 +2039,13 @@ async function buildMm2ValueTarget(
               "RBLXValue API v2 profile",
             sourceUrl: "https://rblxvalue.com",
           })
-        : getRblxValueProfile({
-            userId,
-            requestTimeoutMs: 3_500,
-            maxRetries: 0,
-          }),
+        : usernameForProfile
+          ? getRblxValueProfile({
+              username: usernameForProfile,
+              requestTimeoutMs: 3_500,
+              maxRetries: 0,
+            })
+          : Promise.resolve(null),
     ]);
 
   const mm2Profile =
