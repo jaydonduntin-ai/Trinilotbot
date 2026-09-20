@@ -149,22 +149,37 @@ export async function updateMm2ValuePresence(
   presence,
   { inMm2 = false, alerted = false } = {},
 ) {
+  return updateMm2ValuePresences([
+    { userId, presence, inMm2, alerted },
+  ]);
+}
+
+export async function updateMm2ValuePresences(updates) {
   await initializeMm2ValueWatchlist();
-  const entry = entries.get(Number(userId));
-  if (!entry) return;
+  let changed = 0;
 
-  entry.lastPresenceType =
-    Number.isInteger(Number(presence?.userPresenceType))
-      ? Number(presence.userPresenceType)
-      : entry.lastPresenceType;
-  entry.lastUniverseId =
-    Number.isFinite(Number(presence?.universeId))
-      ? Number(presence.universeId)
-      : null;
-  entry.lastInMm2 = Boolean(inMm2);
-  if (alerted) entry.lastAlertedAt = new Date().toISOString();
+  for (const update of updates ?? []) {
+    const entry = entries.get(Number(update?.userId));
+    if (!entry) continue;
 
-  await persist();
+    const presence = update?.presence;
+    entry.lastPresenceType =
+      Number.isInteger(Number(presence?.userPresenceType))
+        ? Number(presence.userPresenceType)
+        : entry.lastPresenceType;
+    entry.lastUniverseId =
+      Number.isFinite(Number(presence?.universeId))
+        ? Number(presence.universeId)
+        : null;
+    entry.lastInMm2 = Boolean(update?.inMm2);
+    if (update?.alerted) {
+      entry.lastAlertedAt = new Date().toISOString();
+    }
+    changed += 1;
+  }
+
+  if (changed > 0) await persist();
+  return { changed };
 }
 
 async function persist() {
