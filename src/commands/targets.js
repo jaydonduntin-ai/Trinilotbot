@@ -2,7 +2,6 @@ import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_COUNT,
   DEFAULT_TARGET_RAP,
-  DEFAULT_TARGET_VALUE,
   MAX_TARGETS,
   MIN_TARGET_THRESHOLD,
   MAX_TARGET_THRESHOLD,
@@ -18,16 +17,7 @@ export const targetsCommand = {
   definition: new SlashCommandBuilder()
     .setName("target")
     .setDescription(
-      "Expand the candidate pool, then return currently in-game RAP/value targets.",
-    )
-    .addIntegerOption((option) =>
-      option
-        .setName("min_value")
-        .setDescription(
-          `Value floor: ${MIN_TARGET_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEFAULT_TARGET_VALUE.toLocaleString()}.`,
-        )
-        .setMinValue(MIN_TARGET_THRESHOLD)
-        .setMaxValue(MAX_TARGET_THRESHOLD),
+      "Expand the candidate pool, then return currently in-game RAP targets.",
     )
     .addIntegerOption((option) =>
       option
@@ -49,15 +39,13 @@ export const targetsCommand = {
     ),
 
   async execute(interaction) {
-    const minimumValueOption =
-      interaction.options.getInteger("min_value");
     const minimumRapOption =
       interaction.options.getInteger("min_rap");
     const limit =
       interaction.options.getInteger("limit") ?? TARGET_DEFAULT_LIMIT;
 
-    // /target now enforces both configured floors by default.
-    const minimumValue = minimumValueOption ?? DEFAULT_TARGET_VALUE;
+    // /target qualifies by RAP only. Value is informational when available.
+    const minimumValue = null;
     const minimumRap = minimumRapOption ?? DEFAULT_TARGET_RAP;
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -180,7 +168,7 @@ function buildTargetEmbeds(result) {
     .addFields({
       name: "Discovery source",
       value:
-        "Public Roblox presence + public RAP/value sources. " +
+        "Public Roblox presence + public RAP sources; value is informational. " +
         (truncate((result.sources ?? []).join(" · "), 450) || "Unavailable"),
       inline: false,
     })

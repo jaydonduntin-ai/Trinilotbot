@@ -59,8 +59,23 @@ test("/rbx2mm2 is RAP-only with a 150K minimum and 50-result output cap", () => 
 });
 
 
-test("/target, /scan, and /dev expose 150K RAP and value floors", () => {
-  for (const name of ["target", "scan", "dev"]) {
+test("/target is RAP-only while /scan and /dev retain RAP/value floors", () => {
+  const target = commandModules.find(
+    (candidate) => candidate.definition.name === "target",
+  );
+  const targetDefinition = target.definition.toJSON();
+  const targetMinRap = targetDefinition.options.find(
+    (option) => option.name === "min_rap",
+  );
+  const targetMinValue = targetDefinition.options.find(
+    (option) => option.name === "min_value",
+  );
+
+  assert.ok(targetMinRap, "/target should expose min_rap");
+  assert.equal(targetMinRap.min_value, 150000);
+  assert.equal(targetMinValue, undefined);
+
+  for (const name of ["scan", "dev"]) {
     const command = commandModules.find(
       (candidate) => candidate.definition.name === name,
     );
