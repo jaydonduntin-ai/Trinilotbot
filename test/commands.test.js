@@ -98,7 +98,7 @@ test("/dev can request up to 50 developer targets", () => {
 });
 
 
-test("/scan defaults to 50 results and allows up to 50", () => {
+test("/scan is exhaustive by default and keeps an optional manual cap", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "scan",
   );
@@ -106,6 +106,7 @@ test("/scan defaults to 50 results and allows up to 50", () => {
   const limit = definition.options.find((option) => option.name === "limit");
 
   assert.ok(limit);
-  assert.equal(limit.max_value, 50);
-  assert.match(limit.description, /default 50, max 50/i);
+  assert.equal(limit.required, false);
+  assert.equal(limit.max_value, 5000);
+  assert.match(limit.description, /omit to scan all available unseen candidates/i);
 });

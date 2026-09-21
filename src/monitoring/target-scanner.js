@@ -816,8 +816,8 @@ async function scanDiscoveredTargetsInternal({
   const timeBudgetMs = Math.max(
     10_000,
     getPositiveIntegerEnv(
-      "ROBLOX_TARGET_SCAN_TIME_BUDGET_MS",
-      DEFAULT_TARGET_SCAN_TIME_BUDGET_MS,
+      "ROBLOX_SCAN_TIME_BUDGET_MS",
+      120_000,
     ),
   );
 
@@ -1400,11 +1400,14 @@ async function scanDeveloperTargetsInternal({
 export async function scanCandidatesForWatchlist({
   minimumRap = DEFAULT_TARGET_RAP,
   minimumValue = DEFAULT_TARGET_VALUE,
-  limit = 50,
+  limit = null,
 } = {}) {
   await ensureTargetHistoryHydrated();
 
-  const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 50));
+  const requestedLimit =
+    limit === null || limit === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(1, Math.min(5_000, Number(limit) || 1));
   // /scan is for expanding the verified pool. Exclude persisted watchlist
   // members, users already surfaced by /target in this runtime, users already
   // returned by a prior /scan, and candidates already attempted at this exact
@@ -1439,8 +1442,11 @@ export async function scanCandidatesForWatchlist({
     respectCooldown: false,
     excludeUserIds: excludedIds,
     maxCandidatesOverride: getPositiveIntegerEnv(
-      "ROBLOX_TARGET_MAX_PRESENCE_CANDIDATES",
-      DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES,
+      "ROBLOX_SCAN_MAX_CANDIDATES_PER_PASS",
+      getPositiveIntegerEnv(
+        "ROBLOX_TARGET_POOL_MAX_SIZE",
+        DEFAULT_POOL_MAX_SIZE,
+      ),
     ),
   });
 
@@ -1455,6 +1461,7 @@ export async function scanCandidatesForWatchlist({
   const verified = [];
   const newAttemptIds = [];
   let checkedCount = 0;
+  let stopReason = "candidate-selection-exhausted";
 
   const candidates = discovery.userIds
     .sort((leftId, rightId) =>
@@ -1469,8 +1476,17 @@ export async function scanCandidatesForWatchlist({
     );
 
   for (let index = 0; index < candidates.length; index += VERIFY_CONCURRENCY) {
-    if (Date.now() - startedAt >= timeBudgetMs) break;
-    if (verified.length >= requestedLimit) break;
+    if (Date.now() - startedAt >= timeBudgetMs) {
+      stopReason = "time-budget";
+      break;
+    }
+    if (
+      Number.isFinite(requestedLimit) &&
+      verified.length >= requestedLimit
+    ) {
+      stopReason = "qualified-cap";
+      break;
+    }
 
     const batch = candidates.slice(index, index + VERIFY_CONCURRENCY);
     checkedCount += batch.length;
@@ -1517,7 +1533,13 @@ export async function scanCandidatesForWatchlist({
 
       if (player?.qualifies) {
         verified.push(player);
-        if (verified.length >= requestedLimit) break;
+        if (
+          Number.isFinite(requestedLimit) &&
+          verified.length >= requestedLimit
+        ) {
+          stopReason = "qualified-cap";
+          break;
+        }
       }
     }
   }
@@ -1529,9 +1551,11 @@ export async function scanCandidatesForWatchlist({
     );
   }
 
-  const selectedPlayers = verified
-    .slice(0, requestedLimit)
-    .map(({ qualifies, ...player }) => player);
+  const selectedPlayers = (
+    Number.isFinite(requestedLimit)
+      ? verified.slice(0, requestedLimit)
+      : verified
+  ).map(({ qualifies, ...player }) => player);
 
   const reservedIds = [];
   for (const player of selectedPlayers) {
@@ -1551,6 +1575,8 @@ export async function scanCandidatesForWatchlist({
     minimumRap,
     minimumValue,
     checkedCount,
+    candidateCount: candidates.length,
+    stopReason,
     alreadyWatchedSkipped: watchedSkipped,
     previousTargetSkipped,
     previousScanSkipped,

@@ -8,8 +8,7 @@ import {
 } from "../monitoring/target-scanner.js";
 import { addScanPlayers } from "../storage/scan-watchlist.js";
 
-const DEFAULT_SCAN_LIMIT = 50;
-const MAX_SCAN_LIMIT = 50;
+const MAX_MANUAL_SCAN_LIMIT = 5_000;
 
 export const scanCommand = {
   definition: new SlashCommandBuilder()
@@ -39,10 +38,10 @@ export const scanCommand = {
       option
         .setName("limit")
         .setDescription(
-          `Players to add this pass, default ${DEFAULT_SCAN_LIMIT}, max ${MAX_SCAN_LIMIT}.`,
+          `Optional qualified-user cap; omit to scan all available unseen candidates this pass (max manual cap ${MAX_MANUAL_SCAN_LIMIT.toLocaleString()}).`,
         )
         .setMinValue(1)
-        .setMaxValue(MAX_SCAN_LIMIT),
+        .setMaxValue(MAX_MANUAL_SCAN_LIMIT),
     ),
 
   async execute(interaction) {
@@ -50,8 +49,7 @@ export const scanCommand = {
       interaction.options.getInteger("min_rap") ?? DEFAULT_TARGET_RAP;
     const minimumValue =
       interaction.options.getInteger("min_value") ?? DEFAULT_TARGET_VALUE;
-    const limit =
-      interaction.options.getInteger("limit") ?? DEFAULT_SCAN_LIMIT;
+    const limit = interaction.options.getInteger("limit");
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -73,7 +71,10 @@ export const scanCommand = {
         .setDescription(
           [
             `Threshold: ${minimumRap.toLocaleString()}+ RAP · ${minimumValue.toLocaleString()}+ value`,
+            `Mode: ${limit === null ? "exhaustive/resume (no qualified-user cap)" : `manual cap ${limit.toLocaleString()}`}`,
+            `Candidates available this pass: ${result.candidateCount ?? 0}`,
             `Candidates checked: ${result.checkedCount}`,
+            `Stop reason: ${formatScanStopReason(result.stopReason)}`,
             `Watchlist users skipped: ${result.alreadyWatchedSkipped ?? 0}`,
             `Previous /target users skipped: ${result.previousTargetSkipped ?? 0}`,
             `Previous /scan candidates skipped: ${result.previousScanSkipped ?? 0}`,
@@ -83,7 +84,7 @@ export const scanCommand = {
             `Already watched: ${stored.existing}`,
             `Total watchlist: ${stored.total}`,
             "",
-            "Each /scan pass now expands forward instead of replaying prior /target results or candidates already attempted at the same threshold.",
+            "Each /scan pass expands forward. Definitively checked users stay excluded at the same threshold; transient failures may be retried.",
           ].join("\n"),
         )
         .setFooter({
@@ -100,3 +101,12 @@ export const scanCommand = {
     }
   },
 };
+
+
+function formatScanStopReason(reason) {
+  return {
+    "candidate-selection-exhausted": "all currently selected unseen candidates checked",
+    "time-budget": "scan time budget reached; run /scan again to resume",
+    "qualified-cap": "manual qualified-user cap reached",
+  }[reason] ?? "pass completed";
+}
