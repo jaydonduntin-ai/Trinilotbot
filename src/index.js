@@ -5,6 +5,7 @@ import { startTargetCandidatePoolWarmup } from "./monitoring/target-scanner.js";
 import { startScanWatcher } from "./monitoring/scan-watcher.js";
 import { commandRateLimiter } from "./security/rate-limit.js";
 import { initializeAlertSubscriptions } from "./storage/alert-subscribers.js";
+import { getScanWatchlist } from "./storage/scan-watchlist.js";
 import { startJoinBridge } from "./web/join-bridge.js";
 import {
   isGuildAllowed,
@@ -104,6 +105,47 @@ client.once(Events.ClientReady, async (readyClient) => {
             allowedGuildIds = retry.guildIds;
             console.info(
               `Discord guild lock bootstrapped after gateway sync: ${allowedGuildIds.size} allowed guild.`,
+            );
+            return;
+          }
+
+          const watchlist = await getScanWatchlist();
+          const channelFrequency = new Map();
+          for (const entry of watchlist) {
+            for (const rawChannelId of entry?.channels ?? []) {
+              const channelId = String(rawChannelId ?? "").trim();
+              if (!/^\d+$/.test(channelId)) continue;
+              channelFrequency.set(
+                channelId,
+                (channelFrequency.get(channelId) ?? 0) + 1,
+              );
+            }
+          }
+
+          const likelyChannelIds = [...channelFrequency.entries()]
+            .sort((left, right) => right[1] - left[1])
+            .slice(0, 10)
+            .map(([channelId]) => channelId);
+
+          const discoveredGuildIds = new Set();
+          for (const channelId of likelyChannelIds) {
+            try {
+              const channel = await readyClient.channels.fetch(channelId);
+              const guildId = channel?.guildId ?? channel?.guild?.id;
+              if (guildId) discoveredGuildIds.add(String(guildId));
+              if (discoveredGuildIds.size > 1) break;
+            } catch {
+              // Historical channels may have been deleted or may not be
+              // visible to the bot anymore; skip them.
+            }
+          }
+
+          if (discoveredGuildIds.size === 1) {
+            allowedGuildIds = await setAllowedGuildIds(
+              discoveredGuildIds,
+            );
+            console.info(
+              "Discord guild lock bootstrapped from persisted scan history.",
             );
           }
         } catch (error) {
