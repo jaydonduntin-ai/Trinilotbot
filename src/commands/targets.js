@@ -159,7 +159,8 @@ function buildTargetEmbeds(result) {
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
         `Requested: ${result.requestedLimit ?? result.players.length} · Returned: ${result.players.length}`,
         formatPriorityGameSummary(result.players),
-        `Join-ready: ${result.joinReadyCount ?? 0} · Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
+        `Public-joinable returned: ${result.joinReadyCount ?? 0} · Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
+        `Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.expansion?.failed
           ? "Expansion scan: unavailable · live discovery continued"
           : result.expansion?.attempted
@@ -183,7 +184,7 @@ function buildTargetEmbeds(result) {
       inline: false,
     })
     .setFooter({
-      text: "/target expands first, then final-checks Roblox presence before display.",
+      text: "/target expands first, then requires fresh presence plus a public JobId before display.",
     })
     .setTimestamp();
 

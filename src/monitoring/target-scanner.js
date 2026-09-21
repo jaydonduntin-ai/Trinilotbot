@@ -3,6 +3,7 @@ import {
   getAssetOwners,
   getFriendGroupRoles,
   getGameDetails,
+  getPublicGameInstanceMatches,
   getRobloxGroupDetails,
   getRobloxGroupRelationships,
   getRobloxGroupUsers,
@@ -95,6 +96,8 @@ const DEFAULT_TARGET_SCAN_WAVE_SIZE = 250;
 const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 45_000;
 const DEFAULT_TRUSTED_RAP_TTL_MS = 15 * 60 * 1000;
 const FINAL_RECHECK_BATCH_SIZE = 10;
+const PUBLIC_SERVER_VERIFY_CONCURRENCY = 2;
+const DEFAULT_PUBLIC_SERVER_VERIFY_MAX_PAGES = 10;
 const DEFAULT_GAME_SCAN_CANDIDATES = 500;
 const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 25_000;
 const DEFAULT_GAME_SCAN_WAVE_SIZE = 250;
@@ -733,35 +736,13 @@ async function scanDiscoveredTargetsInternal({
     const cachedVerified = cachedResults
       .filter((player) => player?.qualifies)
       .slice(0, Math.min(MAX_TARGETS, requestedLimit + 2));
-    const upstreamBackingOff = Date.now() < presenceApiBackoffUntil;
-    const finalCached = upstreamBackingOff
-      ? {
-          players: cachedVerified,
-          leftGameCount: 0,
-          unavailableCount: 0,
-          rateLimited: true,
-          usedCachedPresenceFallback: true,
-        }
-      : await revalidateCurrentlyInGame(cachedVerified);
+    const finalCached = await revalidateCurrentlyInGame(
+      cachedVerified,
+    );
 
-    const cachedFallback =
-      finalCached.rateLimited === true &&
-      cachedVerified.length > 0 &&
-      finalCached.players.length < requestedLimit
-        ? {
-            ...finalCached,
-            players: cachedVerified,
-            usedCachedPresenceFallback: true,
-          }
-        : finalCached;
-
-    if (
-      cachedFallback.players.length >= requestedLimit ||
-      (cachedFallback.usedCachedPresenceFallback &&
-        cachedFallback.players.length > 0)
-    ) {
+    if (finalCached.players.length >= requestedLimit) {
       const selectedPlayers = sortTargetPlayersForPriority(
-        cachedFallback.players,
+        finalCached.players,
       )
         .slice(0, requestedLimit)
         .map(({ qualifies, ...player }) => player);
@@ -778,12 +759,15 @@ async function scanDiscoveredTargetsInternal({
         candidateSourceCounts: getPoolSourceCounts(),
         presenceScannedCount: cachedPresences.length,
         activeCount: cachedPresences.length,
-        verifiedCount: cachedFallback.players.length,
-        finalPresenceLeftGameCount: cachedFallback.leftGameCount,
-        finalPresenceUnavailableCount: cachedFallback.unavailableCount,
-        presenceRateLimited: cachedFallback.rateLimited === true,
+        verifiedCount: finalCached.players.length,
+        finalPresenceLeftGameCount: finalCached.leftGameCount,
+        finalPresenceUnavailableCount: finalCached.unavailableCount,
+        nonPublicServerCount: finalCached.nonPublicServerCount ?? 0,
+        publicServerVerificationErrorCount:
+          finalCached.publicServerVerificationErrorCount ?? 0,
+        presenceRateLimited: finalCached.rateLimited === true,
         usedCachedPresenceFallback:
-          cachedFallback.usedCachedPresenceFallback === true,
+          false === true,
         verificationAttempts: cachedResults.length,
         valueUnavailableCount: 0,
         belowValueCount: 0,
@@ -792,8 +776,8 @@ async function scanDiscoveredTargetsInternal({
         profileUnavailableCount: 0,
         verificationErrorCount: 0,
         preRecheckVerifiedCount: cachedVerified.length,
-        joinReadyCount: cachedFallback.players.filter((player) => player.joinReady).length,
-        publicServerConfirmedCount: cachedFallback.players.filter((player) => player.publicServerConfirmed).length,
+        joinReadyCount: finalCached.players.filter((player) => player.joinReady).length,
+        publicServerConfirmedCount: finalCached.players.filter((player) => player.publicServerConfirmed).length,
         liveCacheHit: true,
         liveCacheSize: liveTargetCache.size,
         verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
@@ -1010,19 +994,9 @@ async function scanDiscoveredTargetsInternal({
     }
   }
 
-  const stillInGamePlayers =
-    presenceFallbackUsed || presenceRateLimited
-      ? {
-          players: verifiedPlayers.map((player) => ({
-            ...player,
-            presenceVerifiedAt: Date.now(),
-          })),
-          leftGameCount: 0,
-          unavailableCount: 0,
-          rateLimited: presenceRateLimited,
-          usedFallback: presenceFallbackUsed,
-        }
-      : await revalidateCurrentlyInGame(verifiedPlayers);
+  const stillInGamePlayers = await revalidateCurrentlyInGame(
+    verifiedPlayers,
+  );
 
   presenceRateLimited =
     presenceRateLimited || stillInGamePlayers.rateLimited === true;
@@ -1047,6 +1021,9 @@ async function scanDiscoveredTargetsInternal({
     verifiedCount: stillInGamePlayers.players.length,
     finalPresenceLeftGameCount: stillInGamePlayers.leftGameCount,
     finalPresenceUnavailableCount: stillInGamePlayers.unavailableCount,
+    nonPublicServerCount: stillInGamePlayers.nonPublicServerCount ?? 0,
+    publicServerVerificationErrorCount:
+      stillInGamePlayers.publicServerVerificationErrorCount ?? 0,
     presenceRateLimited,
     presenceFallbackUsed:
       presenceFallbackUsed ||
@@ -4613,6 +4590,93 @@ function getInteractivePresenceRoute() {
   };
 }
 
+async function filterPublicJoinablePlayers(players) {
+  const valid = (players ?? []).filter(
+    (player) =>
+      Number.isInteger(Number(player?.placeId)) &&
+      Number(player.placeId) > 0 &&
+      String(player?.gameId ?? "").trim(),
+  );
+
+  if (valid.length === 0) {
+    return {
+      players: [],
+      nonPublicServerCount: (players ?? []).length,
+      verificationErrorCount: 0,
+    };
+  }
+
+  const byPlace = new Map();
+  for (const player of valid) {
+    const placeId = Number(player.placeId);
+    const list = byPlace.get(placeId) ?? [];
+    list.push(player);
+    byPlace.set(placeId, list);
+  }
+
+  const groups = [...byPlace.entries()];
+  const maxPages = getPositiveIntegerEnv(
+    "ROBLOX_JOIN_VERIFY_MAX_PAGES",
+    DEFAULT_PUBLIC_SERVER_VERIFY_MAX_PAGES,
+  );
+
+  const checkedGroups = await mapWithConcurrency(
+    groups,
+    PUBLIC_SERVER_VERIFY_CONCURRENCY,
+    async ([placeId, groupPlayers]) => {
+      try {
+        const wantedIds = groupPlayers.map((player) =>
+          String(player.gameId),
+        );
+        const matches = await getPublicGameInstanceMatches(
+          placeId,
+          wantedIds,
+          { maxPages },
+        );
+
+        return {
+          players: groupPlayers
+            .filter((player) => matches.has(String(player.gameId)))
+            .map((player) => ({
+              ...player,
+              exactJoinUrl: getGameInstanceJoinUrl(
+                player.placeId,
+                player.gameId,
+              ),
+              publicServerConfirmed: true,
+              joinReady: true,
+              joinabilityStatus: "Public server confirmed",
+            })),
+          rejected:
+            groupPlayers.length -
+            groupPlayers.filter((player) =>
+              matches.has(String(player.gameId)),
+            ).length,
+          error: false,
+        };
+      } catch (error) {
+        console.warn(
+          `Public-server verification failed for place ${placeId}:`,
+          error,
+        );
+        return {
+          players: [],
+          rejected: groupPlayers.length,
+          error: true,
+        };
+      }
+    },
+  );
+
+  return {
+    players: checkedGroups.flatMap((group) => group.players),
+    nonPublicServerCount:
+      (players ?? []).length -
+      checkedGroups.flatMap((group) => group.players).length,
+    verificationErrorCount: checkedGroups.filter((group) => group.error).length,
+  };
+}
+
 async function revalidateCurrentlyInGame(players) {
   if (!Array.isArray(players) || players.length === 0) {
     return {
@@ -4677,20 +4741,17 @@ async function revalidateCurrentlyInGame(players) {
         ...freshJoinability,
         presenceVerifiedAt: Date.now(),
       };
-    })
-    .sort((left, right) => {
-      if (left.publicServerConfirmed !== right.publicServerConfirmed) {
-        return Number(right.publicServerConfirmed) -
-          Number(left.publicServerConfirmed);
-      }
-      if (left.joinReady !== right.joinReady) {
-        return Number(right.joinReady) - Number(left.joinReady);
-      }
-      return 0;
     });
 
+  const publicJoinability = await filterPublicJoinablePlayers(
+    confirmedPlayers,
+  );
+  const joinablePlayers = sortTargetPlayersForPriority(
+    publicJoinability.players,
+  );
+
   return {
-    players: confirmedPlayers,
+    players: joinablePlayers,
     leftGameCount: players.filter((player) => {
       const id = Number(player.id);
       return checkedIds.has(id) && !inGameByUserId.has(id);
@@ -4698,6 +4759,9 @@ async function revalidateCurrentlyInGame(players) {
     unavailableCount: players.filter(
       (player) => !checkedIds.has(Number(player.id)),
     ).length,
+    nonPublicServerCount: publicJoinability.nonPublicServerCount,
+    publicServerVerificationErrorCount:
+      publicJoinability.verificationErrorCount,
     rateLimited: check.rateLimited === true,
     usedFallback:
       (route.usingFallback && check.checkedIds.length > 0) ||

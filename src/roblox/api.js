@@ -584,15 +584,24 @@ export async function getGameDetails(universeId) {
   return payload?.data?.[0] ?? null;
 }
 
-export async function isPublicGameInstance(
+export async function getPublicGameInstanceMatches(
   placeId,
-  gameId,
+  gameIds,
   { maxPages = 10 } = {},
 ) {
-  if (!placeId || !gameId) {
-    return false;
+  const normalizedPlaceId = Number(placeId);
+  if (!Number.isInteger(normalizedPlaceId) || normalizedPlaceId <= 0) {
+    return new Set();
   }
 
+  const wanted = new Set(
+    [...(gameIds ?? [])]
+      .map((gameId) => String(gameId ?? "").trim())
+      .filter(Boolean),
+  );
+  if (wanted.size === 0) return new Set();
+
+  const matched = new Set();
   let cursor = null;
   let pages = 0;
 
@@ -602,22 +611,39 @@ export async function isPublicGameInstance(
       : "";
     const payload = await fetchRobloxJson(
       `${GAMES_API_URL}/v1/games/${encodeURIComponent(
-        placeId,
+        normalizedPlaceId,
       )}/servers/Public?sortOrder=Asc&limit=100${cursorQuery}`,
     );
 
-    if (
-      Array.isArray(payload?.data) &&
-      payload.data.some((server) => server.id === gameId)
-    ) {
-      return true;
+    for (const server of payload?.data ?? []) {
+      const id = String(server?.id ?? "");
+      if (wanted.has(id)) matched.add(id);
     }
+
+    if (matched.size >= wanted.size) break;
 
     cursor = payload?.nextPageCursor ?? null;
     pages += 1;
   } while (cursor && pages < Math.max(1, Number(maxPages) || 10));
 
-  return false;
+  return matched;
+}
+
+export async function isPublicGameInstance(
+  placeId,
+  gameId,
+  { maxPages = 10 } = {},
+) {
+  if (!placeId || !gameId) {
+    return false;
+  }
+
+  const matches = await getPublicGameInstanceMatches(
+    placeId,
+    [gameId],
+    { maxPages },
+  );
+  return matches.has(String(gameId));
 }
 
 export async function getAvatarThumbnail(userId) {
