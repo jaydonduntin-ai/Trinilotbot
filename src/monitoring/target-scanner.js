@@ -3730,32 +3730,20 @@ async function refreshMarketplaceCandidateSources() {
     }
   };
 
-  const queryPlans = [
-    { sortType: 2, sortAggregation: 5 },
-    { sortType: 1, sortAggregation: 5 },
-    { sortType: 3, sortAggregation: 1 },
-  ];
-
-  const resultSets = await Promise.all(
-    queryPlans.map(async (plan) => {
-      try {
-        const result = await searchMarketplaceItems({
-          category: 2,
-          subcategory: 2,
-          sortType: plan.sortType,
-          sortAggregation: plan.sortAggregation,
-          limit: 30,
-        });
-        return result.items;
-      } catch (error) {
-        noteMarketplaceError(error);
-        console.warn("Roblox Marketplace discovery failed:", error);
-        return [];
-      }
-    }),
-  );
-
-  const items = resultSets.flat();
+  let items = [];
+  try {
+    const result = await searchMarketplaceItems({
+      category: 2,
+      subcategory: 2,
+      sortType: 2,
+      sortAggregation: 5,
+      limit: 30,
+    });
+    items = result.items ?? [];
+  } catch (error) {
+    noteMarketplaceError(error);
+    console.warn("Roblox Marketplace discovery failed:", error);
+  }
 
   const creatorUserIds = [
     ...new Set(
@@ -3774,6 +3762,19 @@ async function refreshMarketplaceCandidateSources() {
     "Roblox Marketplace creators",
     Date.now(),
   );
+
+  const deepMarketplaceExpansion =
+    String(
+      process.env.ROBLOX_MARKETPLACE_DEEP_EXPANSION_ENABLED ?? "false",
+    ).toLowerCase() === "true";
+
+  if (!deepMarketplaceExpansion) {
+    return {
+      marketplaceCreators: creatorUserIds.length,
+      marketplaceOwners: 0,
+      marketplaceGroupMembers: 0,
+    };
+  }
 
   const ownerSeedAssets = shuffle(
     items.filter((item) => {
@@ -4035,6 +4036,24 @@ async function refreshGroupCandidateSources() {
     "Roblox public user-group graph + group members",
     Date.now(),
   );
+
+  const deepGroupExpansion =
+    String(
+      process.env.ROBLOX_GROUP_DEEP_EXPANSION_ENABLED ?? "false",
+    ).toLowerCase() === "true";
+
+  if (!deepGroupExpansion) {
+    return {
+      groupSearchMembers: groupSearchUserIds.length,
+      groupGraphMembers: groupGraphUserIds.length,
+      friendGroupMembers: 0,
+      primaryGroupMembers: 0,
+      groupOwners: 0,
+      groupWallPosters: 0,
+      allyGroupMembers: 0,
+      enemyGroupMembers: 0,
+    };
+  }
 
   const friendGroupSeeds = selectFriendGroupExpansionSeeds(
     FRIEND_GROUP_SEEDS_PER_REFRESH,
@@ -5684,6 +5703,7 @@ function getPoolSourceCounts() {
     groupWallPosters: 0,
     allyGroupMembers: 0,
     enemyGroupMembers: 0,
+    ps99Public: 0,
   };
 
   const sourceToKey = new Map([
