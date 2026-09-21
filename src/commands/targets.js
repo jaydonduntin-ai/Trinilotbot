@@ -245,22 +245,24 @@ function buildTargetEmbeds(result) {
 function formatTargetJoin(player) {
   const links = [];
 
-  if (player.followJoinUrl) {
-    links.push(`[Join player](<${player.followJoinUrl}>)`);
-  }
   if (player.exactJoinUrl) {
-    links.push(`[Try exact public server](<${player.exactJoinUrl}>)`);
+    links.push(`[Join exact server](<${player.exactJoinUrl}>)`);
+  }
+  if (player.followJoinUrl) {
+    links.push(`[Follow-join fallback](<${player.followJoinUrl}>)`);
   }
 
   const ids = [];
   if (player.placeId) ids.push(`Place: \`${player.placeId}\``);
   if (player.gameId) ids.push(`Job: \`${player.gameId}\``);
 
-  const status = player.publicServerConfirmed
-    ? "Public server confirmed"
-    : player.joinReady
-      ? "Profile follow-join available"
-      : "Join unavailable";
+  const status = player.exactJoinUrl
+    ? "Exact server JobId captured from live presence"
+    : player.publicServerConfirmed
+      ? "Public server confirmed"
+      : player.joinReady
+        ? "Profile follow-join available"
+        : "Join unavailable";
 
   return [
     status,

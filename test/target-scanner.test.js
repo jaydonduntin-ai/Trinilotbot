@@ -74,3 +74,27 @@ test("presence batches use secondary presence source for unresolved IDs", async 
   assert.deepEqual(result.checkedIds, [505]);
   assert.equal(result.presences[0].userPresenceType, 2);
 });
+
+
+test("game instance join helper builds exact JobId bridge URLs", async () => {
+  const previousBridge = process.env.ROBLOX_JOIN_BRIDGE_BASE_URL;
+  process.env.ROBLOX_JOIN_BRIDGE_BASE_URL = "https://example.test";
+
+  try {
+    const { getGameInstanceJoinUrl } = await import(
+      "../src/roblox/game-session.js"
+    );
+    assert.equal(
+      getGameInstanceJoinUrl(123456, "abc-123"),
+      "https://example.test/join/server/123456/abc-123",
+    );
+    assert.equal(getGameInstanceJoinUrl(null, "abc-123"), null);
+    assert.equal(getGameInstanceJoinUrl(123456, ""), null);
+  } finally {
+    if (previousBridge === undefined) {
+      delete process.env.ROBLOX_JOIN_BRIDGE_BASE_URL;
+    } else {
+      process.env.ROBLOX_JOIN_BRIDGE_BASE_URL = previousBridge;
+    }
+  }
+});

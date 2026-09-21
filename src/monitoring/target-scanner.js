@@ -22,7 +22,10 @@ import {
   searchRobloxUsers,
 } from "../roblox/api.js";
 import { getInventorySummary } from "../roblox/inventory.js";
-import { getFollowUserJoinUrl } from "../roblox/game-session.js";
+import {
+  getFollowUserJoinUrl,
+  getGameInstanceJoinUrl,
+} from "../roblox/game-session.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
 import {
   enrichInventoryWithRolimons,
@@ -4385,21 +4388,30 @@ function buildTargetJoinability(presence, userId) {
   const normalizedUserId = Number(userId);
   const placeId = Number(presence?.placeId);
   const gameId = presence?.gameId ? String(presence.gameId) : null;
+  const normalizedPlaceId =
+    Number.isInteger(placeId) && placeId > 0 ? placeId : null;
+  const exactJoinUrl =
+    normalizedPlaceId && gameId
+      ? getGameInstanceJoinUrl(normalizedPlaceId, gameId)
+      : null;
   const followJoinUrl = getFollowUserJoinUrl(normalizedUserId);
 
-  // /target uses the profile-follow join route that mirrors the Join button
-  // users see on Roblox profiles. Do not paginate public server lists here:
-  // that made target verification slow and contributed unnecessary API load.
+  // Prefer the exact JobId captured from the same presence response. This
+  // avoids asking Roblox to resolve the followed user's server again at click
+  // time. Follow-user remains a fallback if the instance moved or is not
+  // accessible to the joining account.
   return {
-    placeId: Number.isInteger(placeId) && placeId > 0 ? placeId : null,
+    placeId: normalizedPlaceId,
     gameId,
     followJoinUrl,
-    exactJoinUrl: null,
-    joinReady: Boolean(followJoinUrl),
+    exactJoinUrl,
+    joinReady: Boolean(exactJoinUrl || followJoinUrl),
     publicServerConfirmed: false,
-    joinabilityStatus: followJoinUrl
-      ? "Profile follow-join available"
-      : "Unavailable",
+    joinabilityStatus: exactJoinUrl
+      ? "Exact live instance available"
+      : followJoinUrl
+        ? "Profile follow-join available"
+        : "Unavailable",
   };
 }
 
@@ -4544,14 +4556,15 @@ async function revalidateCurrentlyInGame(players) {
     .filter((player) => inGameByUserId.has(Number(player.id)))
     .map((player) => {
       const presence = inGameByUserId.get(Number(player.id));
+      const freshJoinability = buildTargetJoinability(
+        presence,
+        player.id,
+      );
       return {
         ...player,
         presenceStatus: "In game",
         gameName: presence?.lastLocation || player.gameName,
-        placeId: presence?.placeId ?? player.placeId ?? null,
-        gameId: presence?.gameId ?? player.gameId ?? null,
-        followJoinUrl:
-          player.followJoinUrl ?? getFollowUserJoinUrl(player.id),
+        ...freshJoinability,
         presenceVerifiedAt: Date.now(),
       };
     })
