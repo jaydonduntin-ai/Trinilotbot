@@ -150,3 +150,12 @@ test("Discord command and option descriptions stay within 100 characters", () =>
     }
   }
 });
+
+
+test("Discord commands are intended for guild-only use", async () => {
+  const { isGuildAllowed } = await import("../src/security/guild-lock.js");
+  const allowed = new Set(["123"]);
+  assert.equal(isGuildAllowed("123", allowed), true);
+  assert.equal(isGuildAllowed("456", allowed), false);
+  assert.equal(isGuildAllowed(null, allowed), false);
+});

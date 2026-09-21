@@ -6,6 +6,10 @@ import { startScanWatcher } from "./monitoring/scan-watcher.js";
 import { commandRateLimiter } from "./security/rate-limit.js";
 import { initializeAlertSubscriptions } from "./storage/alert-subscribers.js";
 import { startJoinBridge } from "./web/join-bridge.js";
+import {
+  isGuildAllowed,
+  resolveAllowedGuildIds,
+} from "./security/guild-lock.js";
 
 startJoinBridge();
 
@@ -38,6 +42,7 @@ const MAX_HEAVY_COMMANDS = readPositiveInteger(
   2,
 );
 let activeHeavyCommands = 0;
+let allowedGuildIds = new Set();
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.info(`Discord connected as ${readyClient.user.tag}`);
@@ -45,9 +50,48 @@ client.once(Events.ClientReady, async (readyClient) => {
   const rest = new REST({ version: "10" }).setToken(token);
 
   try {
-    const desiredCommands = commandModules.map((command) =>
-      command.definition.toJSON(),
+    const lock = await resolveAllowedGuildIds(
+      [...readyClient.guilds.cache.keys()],
     );
+    allowedGuildIds = lock.guildIds;
+
+    if (allowedGuildIds.size === 0) {
+      console.error(
+        "Discord guild lock could not resolve an allowed guild. Set DISCORD_ALLOWED_GUILD_IDS before inviting the bot anywhere else.",
+      );
+    } else {
+      console.info(
+        `Discord guild lock active: ${allowedGuildIds.size} allowed guild(s) · source=${lock.source}${lock.bootstrapped ? " · bootstrapped" : ""}.`,
+      );
+
+      for (const guild of readyClient.guilds.cache.values()) {
+        if (!isGuildAllowed(guild.id, allowedGuildIds)) {
+          console.warn(
+            `Leaving unauthorized Discord guild ${guild.id} during startup.`,
+          );
+          await guild.leave().catch((error) => {
+            console.error(
+              `Failed to leave unauthorized guild ${guild.id}:`,
+              error,
+            );
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Discord guild lock failed to initialize:", error);
+  }
+
+  try {
+    const desiredCommands = commandModules.map((command) => ({
+      ...command.definition.toJSON(),
+      // Restrict slash commands to server installs and guild channels only.
+      // This prevents user-installed copies of the app from exposing commands
+      // in other servers/DMs even while Discord's portal-only Public Bot
+      // toggle is still enabled.
+      integration_types: [0],
+      contexts: [0],
+    }));
     const existingCommands = await rest.get(
       Routes.applicationCommands(readyClient.user.id),
     );
@@ -101,6 +145,28 @@ client.once(Events.ClientReady, async (readyClient) => {
   console.info("Trinilotbot startup sequence finished.");
 });
 
+client.on(Events.GuildCreate, async (guild) => {
+  if (allowedGuildIds.size === 0) {
+    console.warn(
+      `New guild ${guild.id} joined before the guild lock was resolved; leaving it.`,
+    );
+    await guild.leave().catch(() => {});
+    return;
+  }
+
+  if (!isGuildAllowed(guild.id, allowedGuildIds)) {
+    console.warn(
+      `Unauthorized Discord guild ${guild.id} attempted to add the bot; leaving immediately.`,
+    );
+    await guild.leave().catch((error) => {
+      console.error(
+        `Failed to leave unauthorized guild ${guild.id}:`,
+        error,
+      );
+    });
+  }
+});
+
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isAutocomplete()) {
     const command = commandModules.find(
@@ -119,6 +185,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (!interaction.isChatInputCommand()) return;
+
+  if (
+    !interaction.guildId ||
+    !isGuildAllowed(interaction.guildId, allowedGuildIds)
+  ) {
+    await interaction.reply({
+      content: "This app is locked to its private server.",
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+    return;
+  }
 
   const command = commandModules.find(
     (candidate) => candidate.definition.name === interaction.commandName,
@@ -220,6 +297,12 @@ function commandDefinitionsMatch(existingCommands, desiredCommands) {
     type: Number(command?.type ?? 1),
     name: command?.name ?? "",
     description: command?.description ?? "",
+    integration_types: Array.isArray(command?.integration_types)
+      ? command.integration_types.map(Number).sort((a, b) => a - b)
+      : [],
+    contexts: Array.isArray(command?.contexts)
+      ? command.contexts.map(Number).sort((a, b) => a - b)
+      : [],
     options: Array.isArray(command?.options)
       ? command.options.map(normalizeOption)
       : [],
