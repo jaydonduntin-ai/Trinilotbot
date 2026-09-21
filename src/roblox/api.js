@@ -9,6 +9,8 @@ const FRIENDS_API_URL = "https://friends.roblox.com";
 const ACCOUNT_INFORMATION_API_URL = "https://accountinformation.roblox.com";
 const GROUPS_API_URL = "https://groups.roblox.com";
 const CATALOG_API_URL = "https://catalog.roblox.com";
+const ECONOMY_API_URL = "https://economy.roblox.com";
+const MARKETPLACE_SALES_API_URL = "https://apis.roblox.com/marketplace-sales";
 
 export class RobloxApiError extends Error {
   constructor(message, status) {
@@ -756,6 +758,114 @@ export async function getAssetOwners(assetId, { limit = 10 } = {}) {
   }
 
   return { owners, hasMore: Boolean(cursor) };
+}
+
+export async function getAssetResellers(assetId, { limit = 10 } = {}) {
+  const normalizedAssetId = Number(assetId);
+  if (!Number.isInteger(normalizedAssetId) || normalizedAssetId <= 0) {
+    return { resellers: [], source: null };
+  }
+
+  const requestedLimit = Math.max(
+    1,
+    Math.min(100, Number(limit) || 10),
+  );
+
+  let collectibleItemId = null;
+
+  try {
+    const details = await fetchRobloxJson(
+      `${ECONOMY_API_URL}/v2/assets/${encodeURIComponent(
+        normalizedAssetId,
+      )}/details`,
+    );
+    collectibleItemId =
+      details?.collectibleItemId ??
+      details?.CollectibleItemId ??
+      null;
+  } catch (error) {
+    if (![400, 404].includes(Number(error?.status))) throw error;
+  }
+
+  if (!collectibleItemId) {
+    try {
+      const details = await fetchRobloxJson(
+        `${CATALOG_API_URL}/v1/catalog/items/${encodeURIComponent(
+          normalizedAssetId,
+        )}/details?itemType=Asset`,
+      );
+      collectibleItemId =
+        details?.collectibleItemId ??
+        details?.CollectibleItemId ??
+        null;
+    } catch (error) {
+      if (![400, 404].includes(Number(error?.status))) throw error;
+    }
+  }
+
+  if (collectibleItemId) {
+    const payload = await fetchRobloxJson(
+      `${MARKETPLACE_SALES_API_URL}/v1/item/${encodeURIComponent(
+        collectibleItemId,
+      )}/resellers?limit=${requestedLimit}`,
+    );
+
+    const resellers = (payload?.data ?? [])
+      .map((entry) => {
+        const sellerId = Number(
+          entry?.seller?.sellerId ??
+          entry?.seller?.id ??
+          entry?.sellerId,
+        );
+        return {
+          userId:
+            Number.isInteger(sellerId) && sellerId > 0
+              ? sellerId
+              : null,
+          price: Number.isFinite(Number(entry?.price))
+            ? Number(entry.price)
+            : null,
+          serialNumber: entry?.serialNumber ?? null,
+        };
+      })
+      .filter((entry) => entry.userId);
+
+    return {
+      resellers,
+      source: "Roblox marketplace-sales collectible resellers",
+    };
+  }
+
+  const payload = await fetchRobloxJson(
+    `${ECONOMY_API_URL}/v1/assets/${encodeURIComponent(
+      normalizedAssetId,
+    )}/resellers?limit=${requestedLimit}`,
+  );
+
+  const resellers = (payload?.data ?? [])
+    .map((entry) => {
+      const sellerId = Number(
+        entry?.seller?.id ??
+        entry?.seller?.sellerId ??
+        entry?.sellerId,
+      );
+      return {
+        userId:
+          Number.isInteger(sellerId) && sellerId > 0
+            ? sellerId
+            : null,
+        price: Number.isFinite(Number(entry?.price))
+          ? Number(entry.price)
+          : null,
+        serialNumber: entry?.serialNumber ?? null,
+      };
+    })
+    .filter((entry) => entry.userId);
+
+  return {
+    resellers,
+    source: "Roblox economy limited resellers",
+  };
 }
 
 export async function getLimitedInventory(userId, { maxPages = 5 } = {}) {

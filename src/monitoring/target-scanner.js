@@ -1,6 +1,7 @@
 import {
   getAvatarThumbnail,
   getAssetOwners,
+  getAssetResellers,
   getFriendGroupRoles,
   getGameDetails,
   getPublicGameInstanceMatches,
@@ -110,11 +111,12 @@ const DEFAULT_GAME_SCAN_CANDIDATES = 500;
 const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 25_000;
 const DEFAULT_GAME_SCAN_WAVE_SIZE = 250;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
-const DEFAULT_POOL_MAX_SIZE = 25_000;
+const DEFAULT_POOL_MAX_SIZE = 50_000;
 const DEFAULT_POOL_TTL_MS = 48 * 60 * 60 * 1000;
 const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
 const TARGET_POOL_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const LIMITED_OWNER_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const LIMITED_RESELLER_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const GROUP_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const MARKETPLACE_REFRESH_INTERVAL_MS = 8 * 60 * 1000;
 const DEFAULT_SEED_ITEM_COUNT = 4;
@@ -131,6 +133,10 @@ const OWNER_CONCURRENCY = 1;
 const OWNER_DISCOVERY_BUDGET_MS = 18_000;
 const DEFAULT_LIMITED_OWNER_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_LIMITED_OWNER_INTER_ITEM_DELAY_MS = 2_500;
+const DEFAULT_LIMITED_RESELLER_SEED_COUNT = 6;
+const DEFAULT_LIMITED_RESELLERS_PER_ITEM = 15;
+const DEFAULT_LIMITED_RESELLER_INTER_ITEM_DELAY_MS = 1_500;
+const DEFAULT_LIMITED_RESELLER_BACKOFF_MS = 15 * 60 * 1000;
 const DEFAULT_MARKETPLACE_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_GROUP_DISCOVERY_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_USER_SEARCH_BACKOFF_MS = 10 * 60 * 1000;
@@ -222,6 +228,7 @@ let presenceApiBackoffUntil = 0;
 let fallbackPresenceBackoffUntil = 0;
 let publicServerVerificationBackoffUntil = 0;
 let limitedOwnerBackoffUntil = 0;
+let limitedResellerBackoffUntil = 0;
 let marketplaceBackoffUntil = 0;
 let groupBackoffUntil = 0;
 let userSearchBackoffUntil = 0;
@@ -229,6 +236,7 @@ let searchTermCursor = 0;
 let groupSearchTermCursor = 0;
 let leaderboardPageCursor = 1;
 let lastLimitedOwnerRefreshAt = Date.now();
+let lastLimitedResellerRefreshAt = 0;
 let lastGroupRefreshAt = 0;
 let lastLeaderboardRefreshAt = 0;
 let lastMarketplaceRefreshAt = 0;
@@ -436,10 +444,10 @@ export function startTargetCandidatePoolWarmup() {
       const populations = stats.sourceCounts ?? {};
       const yieldStats = stats.refreshYield ?? {};
       console.info(
-        `Target source populations: ${candidatePool.size}/${getPositiveIntegerEnv("ROBLOX_TARGET_POOL_MAX_SIZE", DEFAULT_POOL_MAX_SIZE)} pooled · ${populations.watchlist ?? 0} watchlist · ${populations.leaderboard ?? 0} leaderboard · ${populations.ps99Public ?? 0} PS99 · ${populations.tradeAds ?? 0} trade-ads · ${populations.limitedOwners ?? 0} limited-owners · ${populations.marketplaceOwners ?? 0} marketplace-owners · ${populations.marketplaceCreators ?? 0} marketplace-creators · ${populations.marketplaceGroupMembers ?? 0} marketplace-group-members · ${populations.userSearch ?? 0} Roblox-search · ${populations.rolimonsSearch ?? 0} Rolimon-search · ${populations.groupSearchMembers ?? 0} group-search · ${populations.groupGraphMembers ?? 0} group-graph.`,
+        `Target source populations: ${candidatePool.size}/${getPositiveIntegerEnv("ROBLOX_TARGET_POOL_MAX_SIZE", DEFAULT_POOL_MAX_SIZE)} pooled · ${populations.watchlist ?? 0} watchlist · ${populations.leaderboard ?? 0} leaderboard · ${populations.ps99Public ?? 0} PS99 · ${populations.tradeAds ?? 0} trade-ads · ${populations.limitedResellers ?? 0} limited-resellers · ${populations.limitedOwners ?? 0} limited-owners · ${populations.marketplaceOwners ?? 0} marketplace-owners · ${populations.marketplaceCreators ?? 0} marketplace-creators · ${populations.marketplaceGroupMembers ?? 0} marketplace-group-members · ${populations.userSearch ?? 0} Roblox-search · ${populations.rolimonsSearch ?? 0} Rolimon-search · ${populations.groupSearchMembers ?? 0} group-search · ${populations.groupGraphMembers ?? 0} group-graph.`,
       );
       console.info(
-        `Target refresh yield: ${yieldStats.tradeAds ?? 0} trade-ads · ${yieldStats.limitedOwners ?? 0} limited-owners · ${yieldStats.marketplaceOwners ?? 0} marketplace-owners · ${yieldStats.marketplaceCreators ?? 0} marketplace-creators · ${yieldStats.marketplaceGroupMembers ?? 0} marketplace-group-members · ${yieldStats.userSearch ?? 0} Roblox-search · ${yieldStats.rolimonsSearch ?? 0} Rolimon-search · ${yieldStats.groupSearchMembers ?? 0} group-search · ${yieldStats.groupGraphMembers ?? 0} group-graph · ${yieldStats.jailbreakTrades ?? 0} jailbreak.`,
+        `Target refresh yield: ${yieldStats.tradeAds ?? 0} trade-ads · ${yieldStats.limitedResellers ?? 0} limited-resellers · ${yieldStats.limitedOwners ?? 0} limited-owners · ${yieldStats.marketplaceOwners ?? 0} marketplace-owners · ${yieldStats.marketplaceCreators ?? 0} marketplace-creators · ${yieldStats.marketplaceGroupMembers ?? 0} marketplace-group-members · ${yieldStats.userSearch ?? 0} Roblox-search · ${yieldStats.rolimonsSearch ?? 0} Rolimon-search · ${yieldStats.groupSearchMembers ?? 0} group-search · ${yieldStats.groupGraphMembers ?? 0} group-graph · ${yieldStats.jailbreakTrades ?? 0} jailbreak.`,
       );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
@@ -3516,6 +3524,27 @@ async function refreshGeneralCandidatePool() {
   ];
   addCandidatesToPool(tradeAdUserIds, "Rolimon's recent trade ads", now);
 
+  // Active public limited resellers are a high-signal Roblox-native lane:
+  // users currently listing expensive limiteds are much more likely to carry
+  // meaningful RAP than generic search/group candidates.
+  let limitedResellerUserIds = [];
+  if (
+    now >= limitedResellerBackoffUntil &&
+    now - lastLimitedResellerRefreshAt >=
+      LIMITED_RESELLER_REFRESH_INTERVAL_MS
+  ) {
+    limitedResellerUserIds =
+      await refreshLimitedResellerCandidates(
+        tradeAdsResult?.itemIds ?? [],
+      );
+    addCandidatesToPool(
+      limitedResellerUserIds,
+      "Roblox public limited resellers",
+      now,
+    );
+    lastLimitedResellerRefreshAt = now;
+  }
+
   // Public Roblox limited ownership is the main non-trade-ad discovery route.
   // Rolimon's is used only to choose high-value seed item IDs; ownership itself
   // is verified against Roblox's public asset-owner endpoint.
@@ -3655,6 +3684,7 @@ async function refreshGeneralCandidatePool() {
       watchlist: watchlistUserIds.length,
       tradeAds: tradeAdUserIds.length,
       limitedOwners: limitedOwnerUserIds.length,
+      limitedResellers: limitedResellerUserIds.length,
       leaderboard: leaderboardUserIds.length,
       jailbreakTrades: jailbreakTradeUserIds.length,
       ps99Public: ps99PublicUserIds.length,
@@ -4510,6 +4540,111 @@ function nextGroupSearchTerms(count) {
     groupSearchTermCursor += 1;
   }
   return terms;
+}
+
+async function refreshLimitedResellerCandidates(
+  tradeAdItemIds = [],
+) {
+  if (Date.now() < limitedResellerBackoffUntil) return [];
+
+  try {
+    const dataset = await getRolimonsItems();
+    const seedFloor = getPositiveIntegerEnv(
+      "ROBLOX_TARGET_SEED_MIN_ITEM_RAP",
+      DEFAULT_SEED_MIN_ITEM_RAP,
+    );
+    const seedCount = getPositiveIntegerEnv(
+      "ROBLOX_TARGET_RESELLER_SEED_COUNT",
+      DEFAULT_LIMITED_RESELLER_SEED_COUNT,
+    );
+    const resellersPerItem = getPositiveIntegerEnv(
+      "ROBLOX_TARGET_RESELLERS_PER_ITEM",
+      DEFAULT_LIMITED_RESELLERS_PER_ITEM,
+    );
+
+    const tradeAdSeeds = tradeAdItemIds
+      .map((itemId) => dataset.byId.get(String(itemId)))
+      .filter(Boolean)
+      .filter(
+        (item) =>
+          Math.max(Number(item.rap) || 0, Number(item.value) || 0) >=
+          seedFloor,
+      );
+
+    const highestValueSeeds = dataset.items
+      .filter(
+        (item) =>
+          Math.max(Number(item.rap) || 0, Number(item.value) || 0) >=
+          seedFloor,
+      )
+      .sort(
+        (left, right) =>
+          Math.max(Number(right.rap) || 0, Number(right.value) || 0) -
+          Math.max(Number(left.rap) || 0, Number(left.value) || 0),
+      )
+      .slice(0, Math.max(seedCount * 5, 30));
+
+    const seeds = takeUniqueItems(
+      shuffle([...tradeAdSeeds, ...highestValueSeeds]),
+      seedCount,
+    );
+
+    const userIds = new Set();
+
+    for (let index = 0; index < seeds.length; index += 1) {
+      if (Date.now() < limitedResellerBackoffUntil) break;
+
+      if (index > 0) {
+        await sleep(
+          getPositiveIntegerEnv(
+            "ROBLOX_LIMITED_RESELLER_INTER_ITEM_DELAY_MS",
+            DEFAULT_LIMITED_RESELLER_INTER_ITEM_DELAY_MS,
+          ),
+        );
+      }
+
+      const item = seeds[index];
+      try {
+        const result = await getAssetResellers(item.id, {
+          limit: resellersPerItem,
+        });
+        for (const reseller of result.resellers ?? []) {
+          const userId = Number(reseller?.userId);
+          if (Number.isInteger(userId) && userId > 0) {
+            userIds.add(userId);
+          }
+        }
+      } catch (error) {
+        const status = Number(error?.status);
+        if (status === 429) {
+          limitedResellerBackoffUntil = Math.max(
+            limitedResellerBackoffUntil,
+            Date.now() +
+              getPositiveIntegerEnv(
+                "ROBLOX_LIMITED_RESELLER_BACKOFF_MS",
+                DEFAULT_LIMITED_RESELLER_BACKOFF_MS,
+              ),
+          );
+          console.warn(
+            "Roblox limited-reseller discovery rate-limited; entering reseller backoff.",
+          );
+          break;
+        }
+
+        if (![400, 403, 404].includes(status)) {
+          console.warn(
+            `Limited-reseller discovery failed for ${item.name} (${item.id}):`,
+            error,
+          );
+        }
+      }
+    }
+
+    return [...userIds];
+  } catch (error) {
+    console.warn("Roblox limited-reseller discovery failed:", error);
+    return [];
+  }
 }
 
 async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
@@ -5819,6 +5954,7 @@ function getPoolSourceCounts() {
     rolimonsSearch: 0,
     leaderboard: 0,
     limitedOwners: 0,
+    limitedResellers: 0,
     marketplaceCreators: 0,
     marketplaceOwners: 0,
     marketplaceGroupMembers: 0,
@@ -5848,6 +5984,7 @@ function getPoolSourceCounts() {
       "Rolimon's limited catalog + Roblox public asset owners",
       "limitedOwners",
     ],
+    ["Roblox public limited resellers", "limitedResellers"],
     ["Roblox Marketplace creators", "marketplaceCreators"],
     ["Roblox Marketplace collectible owners", "marketplaceOwners"],
     [
@@ -5917,6 +6054,7 @@ function getCandidatePriority(
   const weights = new Map([
     ["Verified /scan RAP watchlist", 500],
     ["Rolimon's value leaderboard", 120],
+    ["Roblox public limited resellers", 180],
     [
       "Rolimon's limited catalog + Roblox public asset owners",
       110,
