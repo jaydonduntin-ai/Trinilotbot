@@ -130,7 +130,7 @@ const DEFAULT_LIMITED_OWNER_INTER_ITEM_DELAY_MS = 2_500;
 const DEFAULT_MARKETPLACE_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_GROUP_DISCOVERY_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_USER_SEARCH_BACKOFF_MS = 10 * 60 * 1000;
-const SEARCH_TERMS_PER_REFRESH = 12;
+const SEARCH_TERMS_PER_REFRESH = 4;
 const SOCIAL_SEEDS_PER_REFRESH = 10;
 const SEARCH_CONCURRENCY = 4;
 const SOCIAL_CONCURRENCY = 4;
@@ -3406,7 +3406,7 @@ async function refreshSearchCandidateSources() {
       try {
         const result = await searchRobloxUsers(term, { limit: 25 });
         robloxResults.push(result.users ?? []);
-        await sleep(300);
+        await sleep(750);
       } catch (error) {
         if (Number(error?.status) === 429) {
           userSearchBackoffUntil = Math.max(

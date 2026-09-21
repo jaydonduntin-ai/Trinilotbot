@@ -138,9 +138,30 @@ export async function searchMarketplaceItems({
     params.set("Cursor", String(cursor));
   }
 
-  const payload = await fetchRobloxJson(
-    `${CATALOG_API_URL}/v1/search/items/details?${params.toString()}`,
-  );
+  let payload;
+  try {
+    payload = await fetchRobloxJson(
+      `${CATALOG_API_URL}/v1/search/items/details?${params.toString()}`,
+    );
+  } catch (error) {
+    const canUseCollectiblesV2Fallback =
+      Number(error?.status) === 400 &&
+      Number(category) === 2 &&
+      (subcategory === null || subcategory === undefined);
+
+    if (!canUseCollectiblesV2Fallback) throw error;
+
+    const v2Params = new URLSearchParams({
+      salesTypeFilter: "2",
+      limit: String(requestedLimit),
+      sortType: "3",
+    });
+    if (cursor) v2Params.set("cursor", String(cursor));
+
+    payload = await fetchRobloxJson(
+      `${CATALOG_API_URL}/v2/search/items/details?${v2Params.toString()}`,
+    );
+  }
 
   return {
     items: Array.isArray(payload?.data) ? payload.data : [],
