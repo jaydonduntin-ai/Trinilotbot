@@ -12,6 +12,7 @@ test("all slash commands are registered", () => {
     "rbx2mm2",
     "dc2rb",
     "alerts",
+    "dev",
     "target",
     "scan",
   ]);
@@ -53,7 +54,7 @@ test("/rbx2mm2 is RAP-only with a 450K minimum", () => {
 
 
 test("/target and /scan expose 150K RAP and value floors", () => {
-  for (const name of ["target", "scan"]) {
+  for (const name of ["target", "scan", "dev"]) {
     const command = commandModules.find(
       (candidate) => candidate.definition.name === name,
     );

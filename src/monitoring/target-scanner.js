@@ -1039,6 +1039,348 @@ async function scanDiscoveredTargetsInternal({
   };
 }
 
+export async function scanDeveloperTargets({
+  minimumRap = DEFAULT_TARGET_RAP,
+  minimumValue = DEFAULT_TARGET_VALUE,
+  limit = DEFAULT_TARGET_COUNT,
+} = {}) {
+  activeInteractivePresenceScans += 1;
+  try {
+    return await scanDeveloperTargetsInternal({
+      minimumRap,
+      minimumValue,
+      limit,
+    });
+  } finally {
+    activeInteractivePresenceScans = Math.max(
+      0,
+      activeInteractivePresenceScans - 1,
+    );
+  }
+}
+
+async function scanDeveloperTargetsInternal({
+  minimumRap,
+  minimumValue,
+  limit,
+}) {
+  await ensureTargetHistoryHydrated();
+
+  const requestedLimit = Math.max(
+    1,
+    Math.min(MAX_TARGETS, Number(limit) || DEFAULT_TARGET_COUNT),
+  );
+  const discoveryLimit = Math.max(
+    100,
+    Math.min(
+      500,
+      getPositiveIntegerEnv("ROBLOX_DEV_DISCOVERY_CANDIDATES", 250),
+    ),
+  );
+
+  const discovery = await discoverCandidateUserIds({
+    minimumValue: null,
+    minimumRap: null,
+    respectCooldown: false,
+    maxCandidatesOverride: discoveryLimit,
+  });
+
+  const initialRoute = getInteractivePresenceRoute();
+  if (!initialRoute || discovery.userIds.length === 0) {
+    return {
+      minimumRap,
+      minimumValue,
+      players: [],
+      observedGames: 0,
+      developerCandidates: 0,
+      presenceChecked: 0,
+      presenceRateLimited: !initialRoute,
+      presenceFallbackUsed: false,
+      sources: [
+        "Roblox public presence",
+        "Roblox public experience creator metadata",
+        "Roblox public group ownership",
+      ],
+    };
+  }
+
+  const observedPresence = await getPresenceBatched(discovery.userIds, {
+    batchSize: PRESENCE_BATCH_SIZE,
+    maxAttempts: 1,
+    interBatchDelayMs: 1_000,
+    stopOnRateLimit: true,
+    presenceFetcher: initialRoute.presenceFetcher,
+    fallbackFetcher: initialRoute.fallbackFetcher,
+    fallbackOnRateLimit: initialRoute.fallbackOnRateLimit,
+  });
+
+  const universeIds = [
+    ...new Set(
+      observedPresence.presences
+        .filter(
+          (presence) =>
+            Number(presence?.userPresenceType) === 2 &&
+            Number.isInteger(Number(presence?.universeId)) &&
+            Number(presence.universeId) > 0,
+        )
+        .map((presence) => Number(presence.universeId)),
+    ),
+  ].slice(0, 80);
+
+  const games = await mapWithConcurrency(
+    universeIds,
+    4,
+    async (universeId) => {
+      try {
+        return await getGameDetails(universeId);
+      } catch (error) {
+        console.warn(
+          `Developer discovery could not load universe ${universeId}:`,
+          error,
+        );
+        return null;
+      }
+    },
+  );
+
+  const directCreatorIds = new Set();
+  const groupGames = new Map();
+  const evidenceByUser = new Map();
+
+  const addEvidence = (userId, evidence) => {
+    const id = Number(userId);
+    if (!Number.isInteger(id) || id <= 0) return;
+    const list = evidenceByUser.get(id) ?? [];
+    if (
+      !list.some(
+        (entry) =>
+          Number(entry.universeId) === Number(evidence.universeId) &&
+          entry.kind === evidence.kind,
+      )
+    ) {
+      list.push(evidence);
+      evidenceByUser.set(id, list.slice(0, 4));
+    }
+  };
+
+  for (const game of games.filter(Boolean)) {
+    const universeId = Number(game?.id ?? game?.universeId);
+    const creator = game?.creator ?? {};
+    const creatorId = Number(
+      creator?.id ??
+      creator?.creatorTargetId ??
+      game?.creatorTargetId,
+    );
+    const creatorType = String(
+      creator?.type ??
+      creator?.creatorType ??
+      game?.creatorType ??
+      "",
+    ).toLowerCase();
+
+    if (!Number.isInteger(creatorId) || creatorId <= 0) continue;
+
+    const evidence = {
+      universeId,
+      gameName: game?.name ?? `Universe ${universeId}`,
+      creatorName: creator?.name ?? null,
+    };
+
+    if (creatorType === "user") {
+      directCreatorIds.add(creatorId);
+      addEvidence(creatorId, {
+        ...evidence,
+        kind: "experience-creator",
+      });
+    } else if (creatorType === "group") {
+      const entries = groupGames.get(creatorId) ?? [];
+      entries.push(evidence);
+      groupGames.set(creatorId, entries);
+    }
+  }
+
+  const groupIds = [...groupGames.keys()];
+  const groupDetails = await mapWithConcurrency(
+    groupIds,
+    3,
+    async (groupId) => {
+      try {
+        return {
+          groupId,
+          details: await getRobloxGroupDetails(groupId),
+        };
+      } catch (error) {
+        console.warn(
+          `Developer discovery could not load creator group ${groupId}:`,
+          error,
+        );
+        return { groupId, details: null };
+      }
+    },
+  );
+
+  const groupOwnerIds = new Set();
+  for (const { groupId, details } of groupDetails) {
+    const ownerId = Number(
+      details?.owner?.userId ??
+      details?.owner?.id ??
+      details?.ownerUserId,
+    );
+    if (!Number.isInteger(ownerId) || ownerId <= 0) continue;
+    groupOwnerIds.add(ownerId);
+    for (const evidence of groupGames.get(groupId) ?? []) {
+      addEvidence(ownerId, {
+        ...evidence,
+        kind: "creator-group-owner",
+        groupId,
+        groupName: details?.name ?? evidence.creatorName ?? null,
+      });
+    }
+  }
+
+  const directIds = [...directCreatorIds];
+  const ownerIds = [...groupOwnerIds];
+  addCandidatesToPool(
+    directIds,
+    "Roblox public experience creators",
+    Date.now(),
+  );
+  addCandidatesToPool(
+    ownerIds,
+    "Roblox public experience creator-group owners",
+    Date.now(),
+  );
+
+  const developerIds = [...new Set([...directIds, ...ownerIds])];
+  if (developerIds.length === 0) {
+    return {
+      minimumRap,
+      minimumValue,
+      players: [],
+      observedGames: universeIds.length,
+      developerCandidates: 0,
+      presenceChecked: observedPresence.checkedIds.length,
+      presenceRateLimited: observedPresence.rateLimited === true,
+      presenceFallbackUsed:
+        initialRoute.usingFallback || observedPresence.usedFallback === true,
+      sources: [
+        "Roblox public presence",
+        "Roblox public experience creator metadata",
+        "Roblox public group ownership",
+      ],
+    };
+  }
+
+  const creatorRoute = getInteractivePresenceRoute();
+  if (!creatorRoute) {
+    return {
+      minimumRap,
+      minimumValue,
+      players: [],
+      observedGames: universeIds.length,
+      developerCandidates: developerIds.length,
+      presenceChecked: observedPresence.checkedIds.length,
+      presenceRateLimited: true,
+      presenceFallbackUsed:
+        initialRoute.usingFallback || observedPresence.usedFallback === true,
+      sources: [
+        "Roblox public presence",
+        "Roblox public experience creator metadata",
+        "Roblox public group ownership",
+      ],
+    };
+  }
+
+  const creatorPresence = await getPresenceBatched(developerIds, {
+    batchSize: PRESENCE_BATCH_SIZE,
+    maxAttempts: 1,
+    interBatchDelayMs: 1_000,
+    stopOnRateLimit: true,
+    presenceFetcher: creatorRoute.presenceFetcher,
+    fallbackFetcher: creatorRoute.fallbackFetcher,
+    fallbackOnRateLimit: creatorRoute.fallbackOnRateLimit,
+  });
+
+  const inGameCreators = creatorPresence.presences
+    .filter((presence) => Number(presence?.userPresenceType) === 2)
+    .sort(
+      (left, right) =>
+        getCandidatePriority(
+          candidatePool.get(Number(right.userId)),
+          { minimumValue, minimumRap },
+        ) -
+        getCandidatePriority(
+          candidatePool.get(Number(left.userId)),
+          { minimumValue, minimumRap },
+        ),
+    )
+    .slice(0, 40);
+
+  const verified = [];
+  for (
+    let index = 0;
+    index < inGameCreators.length && verified.length < requestedLimit;
+    index += VERIFY_CONCURRENCY
+  ) {
+    const batch = inGameCreators.slice(index, index + VERIFY_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map((presence) =>
+        buildDiscoveredTargetPlayer(
+          presence,
+          {
+            minimumValue,
+            minimumRap,
+            includeGameValue: false,
+          },
+        ).catch((error) => {
+          console.warn(
+            `Developer target verification failed for Roblox user ${presence.userId}:`,
+            error,
+          );
+          return null;
+        }),
+      ),
+    );
+
+    for (const player of results) {
+      if (!player?.qualifies) continue;
+      verified.push({
+        ...player,
+        developerEvidence:
+          evidenceByUser.get(Number(player.id)) ?? [],
+      });
+      if (verified.length >= requestedLimit) break;
+    }
+  }
+
+  return {
+    minimumRap,
+    minimumValue,
+    players: verified.slice(0, requestedLimit),
+    observedGames: universeIds.length,
+    developerCandidates: developerIds.length,
+    presenceChecked:
+      observedPresence.checkedIds.length +
+      creatorPresence.checkedIds.length,
+    inGameDeveloperCandidates: inGameCreators.length,
+    presenceRateLimited:
+      observedPresence.rateLimited === true ||
+      creatorPresence.rateLimited === true,
+    presenceFallbackUsed:
+      initialRoute.usingFallback ||
+      creatorRoute.usingFallback ||
+      observedPresence.usedFallback === true ||
+      creatorPresence.usedFallback === true,
+    sources: [
+      "Roblox public presence",
+      "Roblox public experience creator metadata",
+      "Roblox public group ownership",
+      "Roblox public collectibles inventory",
+      "Rolimon's public player info (RAP/value cross-check only)",
+    ],
+  };
+}
+
 export async function scanCandidatesForWatchlist({
   minimumRap = DEFAULT_TARGET_RAP,
   minimumValue = DEFAULT_TARGET_VALUE,
