@@ -100,8 +100,12 @@ const DEFAULT_TARGET_SCAN_WAVE_SIZE = 250;
 const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 90_000;
 const DEFAULT_TRUSTED_RAP_TTL_MS = 15 * 60 * 1000;
 const FINAL_RECHECK_BATCH_SIZE = 10;
-const PUBLIC_SERVER_VERIFY_CONCURRENCY = 2;
+const PUBLIC_SERVER_VERIFY_CONCURRENCY = 1;
 const DEFAULT_PUBLIC_SERVER_VERIFY_MAX_PAGES = 10;
+const DEFAULT_PUBLIC_SERVER_VERIFY_INTER_GROUP_DELAY_MS = 750;
+const DEFAULT_PUBLIC_SERVER_VERIFY_INTER_PAGE_DELAY_MS = 250;
+const DEFAULT_PUBLIC_SERVER_VERIFY_BACKOFF_MS = 2 * 60 * 1000;
+const DEFAULT_PUBLIC_SERVER_CONFIRMATION_TTL_MS = 90 * 1000;
 const DEFAULT_GAME_SCAN_CANDIDATES = 500;
 const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 25_000;
 const DEFAULT_GAME_SCAN_WAVE_SIZE = 250;
@@ -195,6 +199,7 @@ const GROUP_SEARCH_TERMS = [
 
 const candidatePool = new Map();
 const liveTargetCache = new Map();
+const publicServerConfirmationCache = new Map();
 
 // /scan is an expansion command, not a replay command. Keep a runtime history
 // of users already surfaced by /target and candidates already attempted by
@@ -215,6 +220,7 @@ let lastLiveCacheRefreshAt = 0;
 let liveCacheBackoffUntil = 0;
 let presenceApiBackoffUntil = 0;
 let fallbackPresenceBackoffUntil = 0;
+let publicServerVerificationBackoffUntil = 0;
 let limitedOwnerBackoffUntil = 0;
 let marketplaceBackoffUntil = 0;
 let groupBackoffUntil = 0;
@@ -5073,77 +5079,175 @@ async function filterPublicJoinablePlayers(players) {
       players: [],
       nonPublicServerCount: (players ?? []).length,
       verificationErrorCount: 0,
+      rateLimited: false,
+    };
+  }
+
+  const now = Date.now();
+  const confirmationTtlMs = getPositiveIntegerEnv(
+    "ROBLOX_JOIN_VERIFY_CACHE_TTL_MS",
+    DEFAULT_PUBLIC_SERVER_CONFIRMATION_TTL_MS,
+  );
+  const confirmedByCache = [];
+  const remaining = [];
+
+  for (const player of valid) {
+    const key = `${Number(player.placeId)}:${String(player.gameId)}`;
+    const expiresAt = Number(publicServerConfirmationCache.get(key) ?? 0);
+    if (expiresAt > now) {
+      confirmedByCache.push({
+        ...player,
+        exactJoinUrl: getGameInstanceJoinUrl(
+          player.placeId,
+          player.gameId,
+        ),
+        publicServerConfirmed: true,
+        joinReady: true,
+        joinabilityStatus: "Public server confirmed",
+      });
+    } else {
+      if (expiresAt > 0) publicServerConfirmationCache.delete(key);
+      remaining.push(player);
+    }
+  }
+
+  if (remaining.length === 0) {
+    return {
+      players: confirmedByCache,
+      nonPublicServerCount:
+        (players ?? []).length - confirmedByCache.length,
+      verificationErrorCount: 0,
+      rateLimited: false,
     };
   }
 
   const byPlace = new Map();
-  for (const player of valid) {
+  for (const player of remaining) {
     const placeId = Number(player.placeId);
     const list = byPlace.get(placeId) ?? [];
     list.push(player);
     byPlace.set(placeId, list);
   }
 
-  const groups = [...byPlace.entries()];
+  const groups = [...byPlace.entries()].sort((left, right) => {
+    const rightPriority = right[1].some(
+      (player) => Boolean(player?.priorityGameKey),
+    );
+    const leftPriority = left[1].some(
+      (player) => Boolean(player?.priorityGameKey),
+    );
+    if (rightPriority !== leftPriority) {
+      return Number(rightPriority) - Number(leftPriority);
+    }
+    return right[1].length - left[1].length;
+  });
+
   const maxPages = getPositiveIntegerEnv(
     "ROBLOX_JOIN_VERIFY_MAX_PAGES",
     DEFAULT_PUBLIC_SERVER_VERIFY_MAX_PAGES,
   );
-
-  const checkedGroups = await mapWithConcurrency(
-    groups,
-    PUBLIC_SERVER_VERIFY_CONCURRENCY,
-    async ([placeId, groupPlayers]) => {
-      try {
-        const wantedIds = groupPlayers.map((player) =>
-          String(player.gameId),
-        );
-        const matches = await getPublicGameInstanceMatches(
-          placeId,
-          wantedIds,
-          { maxPages },
-        );
-
-        return {
-          players: groupPlayers
-            .filter((player) => matches.has(String(player.gameId)))
-            .map((player) => ({
-              ...player,
-              exactJoinUrl: getGameInstanceJoinUrl(
-                player.placeId,
-                player.gameId,
-              ),
-              publicServerConfirmed: true,
-              joinReady: true,
-              joinabilityStatus: "Public server confirmed",
-            })),
-          rejected:
-            groupPlayers.length -
-            groupPlayers.filter((player) =>
-              matches.has(String(player.gameId)),
-            ).length,
-          error: false,
-        };
-      } catch (error) {
-        console.warn(
-          `Public-server verification failed for place ${placeId}:`,
-          error,
-        );
-        return {
-          players: [],
-          rejected: groupPlayers.length,
-          error: true,
-        };
-      }
-    },
+  const interGroupDelayMs = getPositiveIntegerEnv(
+    "ROBLOX_JOIN_VERIFY_INTER_GROUP_DELAY_MS",
+    DEFAULT_PUBLIC_SERVER_VERIFY_INTER_GROUP_DELAY_MS,
+  );
+  const interPageDelayMs = getPositiveIntegerEnv(
+    "ROBLOX_JOIN_VERIFY_INTER_PAGE_DELAY_MS",
+    DEFAULT_PUBLIC_SERVER_VERIFY_INTER_PAGE_DELAY_MS,
+  );
+  const backoffMs = getPositiveIntegerEnv(
+    "ROBLOX_JOIN_VERIFY_BACKOFF_MS",
+    DEFAULT_PUBLIC_SERVER_VERIFY_BACKOFF_MS,
   );
 
+  const verifiedPlayers = [...confirmedByCache];
+  let verificationErrorCount = 0;
+  let rateLimited = false;
+
+  if (Date.now() < publicServerVerificationBackoffUntil) {
+    return {
+      players: verifiedPlayers,
+      nonPublicServerCount:
+        (players ?? []).length - verifiedPlayers.length,
+      verificationErrorCount: groups.length,
+      rateLimited: true,
+    };
+  }
+
+  for (let index = 0; index < groups.length; index += 1) {
+    if (Date.now() < publicServerVerificationBackoffUntil) {
+      rateLimited = true;
+      verificationErrorCount += groups.length - index;
+      break;
+    }
+
+    const [placeId, groupPlayers] = groups[index];
+
+    try {
+      const wantedIds = groupPlayers.map((player) =>
+        String(player.gameId),
+      );
+      const matches = await getPublicGameInstanceMatches(
+        placeId,
+        wantedIds,
+        {
+          maxPages,
+          interPageDelayMs,
+        },
+      );
+
+      for (const player of groupPlayers) {
+        if (!matches.has(String(player.gameId))) continue;
+
+        const key = `${Number(player.placeId)}:${String(player.gameId)}`;
+        publicServerConfirmationCache.set(
+          key,
+          Date.now() + confirmationTtlMs,
+        );
+
+        verifiedPlayers.push({
+          ...player,
+          exactJoinUrl: getGameInstanceJoinUrl(
+            player.placeId,
+            player.gameId,
+          ),
+          publicServerConfirmed: true,
+          joinReady: true,
+          joinabilityStatus: "Public server confirmed",
+        });
+      }
+    } catch (error) {
+      const status = Number(error?.status);
+      if (status === 429) {
+        publicServerVerificationBackoffUntil = Math.max(
+          publicServerVerificationBackoffUntil,
+          Date.now() + backoffMs,
+        );
+        rateLimited = true;
+        verificationErrorCount += groups.length - index;
+        console.warn(
+          `Public-server verification rate-limited at place ${placeId}; entering backoff and stopping this verification sweep.`,
+        );
+        break;
+      }
+
+      verificationErrorCount += 1;
+      console.warn(
+        `Public-server verification failed for place ${placeId}:`,
+        error,
+      );
+    }
+
+    if (index + 1 < groups.length && interGroupDelayMs > 0) {
+      await sleep(interGroupDelayMs);
+    }
+  }
+
   return {
-    players: checkedGroups.flatMap((group) => group.players),
+    players: verifiedPlayers,
     nonPublicServerCount:
-      (players ?? []).length -
-      checkedGroups.flatMap((group) => group.players).length,
-    verificationErrorCount: checkedGroups.filter((group) => group.error).length,
+      (players ?? []).length - verifiedPlayers.length,
+    verificationErrorCount,
+    rateLimited,
   };
 }
 
@@ -5232,7 +5336,9 @@ async function revalidateCurrentlyInGame(players) {
     nonPublicServerCount: publicJoinability.nonPublicServerCount,
     publicServerVerificationErrorCount:
       publicJoinability.verificationErrorCount,
-    rateLimited: check.rateLimited === true,
+    rateLimited:
+      check.rateLimited === true ||
+      publicJoinability.rateLimited === true,
     usedFallback:
       (route.usingFallback && check.checkedIds.length > 0) ||
       check.usedFallback === true,

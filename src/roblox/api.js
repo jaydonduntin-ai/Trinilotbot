@@ -613,7 +613,7 @@ export async function getGameDetails(universeId) {
 export async function getPublicGameInstanceMatches(
   placeId,
   gameIds,
-  { maxPages = 10 } = {},
+  { maxPages = 10, interPageDelayMs = 250 } = {},
 ) {
   const normalizedPlaceId = Number(placeId);
   if (!Number.isInteger(normalizedPlaceId) || normalizedPlaceId <= 0) {
@@ -650,6 +650,16 @@ export async function getPublicGameInstanceMatches(
 
     cursor = payload?.nextPageCursor ?? null;
     pages += 1;
+
+    if (
+      cursor &&
+      pages < Math.max(1, Number(maxPages) || 10) &&
+      Number(interPageDelayMs) > 0
+    ) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, Number(interPageDelayMs)),
+      );
+    }
   } while (cursor && pages < Math.max(1, Number(maxPages) || 10));
 
   return matched;
