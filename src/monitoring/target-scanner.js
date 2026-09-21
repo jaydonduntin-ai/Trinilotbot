@@ -97,6 +97,7 @@ const MANUAL_LIMITED_OWNER_SEEDS = [
 ];
 const OWNER_CONCURRENCY = 1;
 const OWNER_DISCOVERY_BUDGET_MS = 12_000;
+const DEFAULT_LIMITED_OWNER_BACKOFF_MS = 10 * 60 * 1000;
 const SEARCH_TERMS_PER_REFRESH = 12;
 const SOCIAL_SEEDS_PER_REFRESH = 10;
 const SEARCH_CONCURRENCY = 4;
@@ -3680,10 +3681,18 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
       seedItemCount,
     );
 
+    let stopLimitedOwnerSweep = false;
     const ownerPromise = mapWithConcurrency(
       seedItems,
       OWNER_CONCURRENCY,
       async (item) => {
+        if (
+          stopLimitedOwnerSweep ||
+          Date.now() < discoveryApiBackoffUntil
+        ) {
+          return [];
+        }
+
         try {
           const result = await getAssetOwners(item.id, {
             limit: ownersPerItem,
@@ -3691,9 +3700,17 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
           return result.owners;
         } catch (error) {
           if (Number(error?.status) === 429) {
+            stopLimitedOwnerSweep = true;
             discoveryApiBackoffUntil = Math.max(
               discoveryApiBackoffUntil,
-              Date.now() + DEFAULT_PRESENCE_API_BACKOFF_MS,
+              Date.now() +
+                getPositiveIntegerEnv(
+                  "ROBLOX_LIMITED_OWNER_BACKOFF_MS",
+                  DEFAULT_LIMITED_OWNER_BACKOFF_MS,
+                ),
+            );
+            console.warn(
+              "Roblox limited-owner endpoint rate-limited; stopping this owner sweep and entering backoff.",
             );
           }
           console.warn(
