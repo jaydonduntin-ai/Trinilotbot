@@ -3646,7 +3646,6 @@ async function refreshGeneralCandidatePool() {
     },
   };
 }
-}
 
 async function refreshPs99PublicCandidates(now = Date.now()) {
   if (
