@@ -715,11 +715,6 @@ async function scanDiscoveredTargetsInternal({
     MAX_TARGETS,
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
   );
-  const scanTimeBudgetMs =
-    Number.isFinite(Number(timeBudgetMs)) && Number(timeBudgetMs) > 0
-      ? Number(timeBudgetMs)
-      : DEFAULT_GAME_SCAN_TIME_BUDGET_MS;
-
   const cacheStartedAt = Date.now();
   const cachedPresences = getFreshLiveCachePresences({
     minimumValue,
@@ -1398,12 +1393,14 @@ async function scanDeveloperTargetsInternal({
     finalPresenceUnavailableCount: finalJoinability.unavailableCount ?? 0,
     presenceRateLimited:
       observedPresence.rateLimited === true ||
-      creatorPresence.rateLimited === true,
+      creatorPresence.rateLimited === true ||
+      finalJoinability.rateLimited === true,
     presenceFallbackUsed:
       initialRoute.usingFallback ||
       creatorRoute.usingFallback ||
       observedPresence.usedFallback === true ||
-      creatorPresence.usedFallback === true,
+      creatorPresence.usedFallback === true ||
+      finalJoinability.usedFallback === true,
     sources: [
       "Roblox public presence",
       "Roblox public experience creator metadata",
@@ -2780,6 +2777,14 @@ export async function scanGameTargets({
     MAX_TARGETS,
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
   );
+  const scanTimeBudgetMs =
+    Number.isFinite(Number(timeBudgetMs)) && Number(timeBudgetMs) > 0
+      ? Number(timeBudgetMs)
+      : DEFAULT_GAME_SCAN_TIME_BUDGET_MS;
+  const qualificationGoal = Math.min(
+    200,
+    Math.max(requestedLimit * 4, requestedLimit + 25),
+  );
 
   activeInteractivePresenceScans += 1;
   try {
@@ -2892,7 +2897,7 @@ export async function scanGameTargets({
     while (
       offset < discovery.userIds.length &&
       Date.now() - startedAt < scanTimeBudgetMs &&
-      verifiedPlayers.length < requestedLimit
+      verifiedPlayers.length < qualificationGoal
     ) {
       const wave = discovery.userIds.slice(
         offset,
@@ -2947,7 +2952,7 @@ export async function scanGameTargets({
       ) {
         if (
           Date.now() - startedAt >= scanTimeBudgetMs ||
-          verifiedPlayers.length >= requestedLimit
+          verifiedPlayers.length >= qualificationGoal
         ) {
           break;
         }
