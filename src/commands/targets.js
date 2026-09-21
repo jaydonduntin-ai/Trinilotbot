@@ -78,6 +78,7 @@ export const targetsCommand = {
           minimumValue,
           minimumRap,
           limit: TARGET_EXPANSION_LIMIT,
+          deepScan: false,
         });
         const stored = await addScanPlayers(
           scanResult.players,

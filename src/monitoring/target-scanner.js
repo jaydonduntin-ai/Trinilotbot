@@ -816,8 +816,8 @@ async function scanDiscoveredTargetsInternal({
   const timeBudgetMs = Math.max(
     10_000,
     getPositiveIntegerEnv(
-      "ROBLOX_SCAN_TIME_BUDGET_MS",
-      120_000,
+      "ROBLOX_TARGET_SCAN_TIME_BUDGET_MS",
+      DEFAULT_TARGET_SCAN_TIME_BUDGET_MS,
     ),
   );
 
@@ -1401,6 +1401,7 @@ export async function scanCandidatesForWatchlist({
   minimumRap = DEFAULT_TARGET_RAP,
   minimumValue = DEFAULT_TARGET_VALUE,
   limit = null,
+  deepScan = true,
 } = {}) {
   await ensureTargetHistoryHydrated();
 
@@ -1441,21 +1442,28 @@ export async function scanCandidatesForWatchlist({
     minimumRap,
     respectCooldown: false,
     excludeUserIds: excludedIds,
-    maxCandidatesOverride: getPositiveIntegerEnv(
-      "ROBLOX_SCAN_MAX_CANDIDATES_PER_PASS",
-      getPositiveIntegerEnv(
-        "ROBLOX_TARGET_POOL_MAX_SIZE",
-        DEFAULT_POOL_MAX_SIZE,
-      ),
-    ),
+    maxCandidatesOverride: deepScan
+      ? getPositiveIntegerEnv(
+          "ROBLOX_SCAN_MAX_CANDIDATES_PER_PASS",
+          getPositiveIntegerEnv(
+            "ROBLOX_TARGET_POOL_MAX_SIZE",
+            DEFAULT_POOL_MAX_SIZE,
+          ),
+        )
+      : getPositiveIntegerEnv(
+          "ROBLOX_TARGET_MAX_PRESENCE_CANDIDATES",
+          DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES,
+        ),
   });
 
   const startedAt = Date.now();
   const timeBudgetMs = Math.max(
     10_000,
     getPositiveIntegerEnv(
-      "ROBLOX_TARGET_SCAN_TIME_BUDGET_MS",
-      DEFAULT_TARGET_SCAN_TIME_BUDGET_MS,
+      deepScan
+        ? "ROBLOX_SCAN_TIME_BUDGET_MS"
+        : "ROBLOX_TARGET_SCAN_TIME_BUDGET_MS",
+      deepScan ? 120_000 : DEFAULT_TARGET_SCAN_TIME_BUDGET_MS,
     ),
   );
   const verified = [];
