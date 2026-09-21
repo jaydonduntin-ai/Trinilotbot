@@ -136,6 +136,7 @@ const ROLIMONS_SEARCH_TERMS_PER_REFRESH = 6;
 const ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const JAILBREAK_TRADE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const PS99_PUBLIC_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const SEARCH_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 20;
 const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 8 * 60 * 1000;
@@ -170,6 +171,8 @@ const MM2_VALUE_DISCOVERY_BATCH_SIZE = 15;
 const MM2_VALUE_INDEX_TTL_MS = 30 * 60 * 1000;
 
 const SEARCH_TERMS = [
+  "mm2","murdermystery2","adoptme","bladeball","petsim99","ps99",
+  "limited","trade","trader","collector","rich","rap",
   "pro","king","queen","dark","shadow","cool","game","player","star","wolf",
   "dragon","ninja","blue","red","green","gold","fire","ice","the","boy",
   "girl","roblox","master","elite","legend","nova","sky","moon","sun","cat",
@@ -179,8 +182,9 @@ const SEARCH_TERMS = [
 ];
 
 const GROUP_SEARCH_TERMS = [
+  "mm2","murder mystery","adopt me","blade ball","pet simulator 99","ps99",
   "roblox","gaming","community","trading","players","fans","clan","group",
-  "mm2","adopt","limited","trade","roleplay","pvp","builders","collectors",
+  "adopt","limited","trade","roleplay","pvp","builders","collectors",
   "market","social","friends","games"
 ];
 
@@ -216,6 +220,7 @@ let lastLeaderboardRefreshAt = 0;
 let lastMarketplaceRefreshAt = 0;
 let lastJailbreakTradeRefreshAt = 0;
 let lastPs99PublicRefreshAt = 0;
+let lastSearchRefreshAt = 0;
 let limitedSeedCursor = 0;
 let candidateRefreshPromise = null;
 let lastCandidatePoolRefreshAt = 0;
@@ -413,7 +418,7 @@ export function startTargetCandidatePoolWarmup() {
     try {
       const stats = await refreshCandidatePool();
       console.info(
-        `Target index refresh: ${candidatePool.size} pooled · ${stats.leaderboard ?? 0} leaderboard · ${stats.ps99Public ?? 0} PS99-public · ${stats.watchlist ?? 0} scan-watchlist.`,
+        `Target index refresh: ${candidatePool.size}/${getPositiveIntegerEnv("ROBLOX_TARGET_POOL_MAX_SIZE", DEFAULT_POOL_MAX_SIZE)} pooled · ${stats.watchlist ?? 0} watchlist · ${stats.leaderboard ?? 0} leaderboard · ${stats.ps99Public ?? 0} PS99 · ${stats.tradeAds ?? 0} trade-ads · ${stats.limitedOwners ?? 0} limited-owners · ${stats.marketplaceOwners ?? 0} marketplace-owners · ${stats.marketplaceCreators ?? 0} marketplace-creators · ${stats.marketplaceGroupMembers ?? 0} marketplace-group-members · ${stats.userSearch ?? 0} Roblox-search · ${stats.rolimonsSearch ?? 0} Rolimon-search · ${stats.groupSearchMembers ?? 0} group-search · ${stats.groupGraphMembers ?? 0} group-graph · ${stats.jailbreakTrades ?? 0} jailbreak.`,
       );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
@@ -454,6 +459,12 @@ export function startTargetCandidatePoolWarmup() {
       const initialLiveTimer = setTimeout(refreshLive, 30_000);
       initialLiveTimer.unref?.();
     });
+
+  const initialFullRefreshTimer = setTimeout(
+    refreshCandidates,
+    45_000,
+  );
+  initialFullRefreshTimer.unref?.();
 
   targetPoolWarmupTimer = setInterval(
     refreshCandidates,
@@ -3367,7 +3378,73 @@ async function syncWatchlistCandidates(now = Date.now()) {
   return watchlistUserIds;
 }
 
+async function refreshSearchCandidateSources() {
+  const terms = nextSearchTerms(SEARCH_TERMS_PER_REFRESH);
+
+  const robloxResults = await mapWithConcurrency(
+    terms,
+    SEARCH_CONCURRENCY,
+    async (term) => {
+      try {
+        const result = await searchRobloxUsers(term, { limit: 25 });
+        return result.users ?? [];
+      } catch (error) {
+        console.warn(`Roblox user search failed for "${term}":`, error);
+        return [];
+      }
+    },
+  );
+
+  const robloxUserIds = [
+    ...new Set(
+      robloxResults
+        .flat()
+        .map((user) => Number(user?.id ?? user?.userId))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+  addCandidatesToPool(
+    robloxUserIds,
+    "Roblox public user search",
+    Date.now(),
+  );
+
+  const rolimonsResults = await mapWithConcurrency(
+    terms.slice(0, ROLIMONS_SEARCH_TERMS_PER_REFRESH),
+    SEARCH_CONCURRENCY,
+    async (term) => {
+      try {
+        const result = await searchRolimonsPlayers(term);
+        return result.players ?? [];
+      } catch (error) {
+        console.warn(`Rolimon's player search failed for "${term}":`, error);
+        return [];
+      }
+    },
+  );
+
+  const rolimonsUserIds = [
+    ...new Set(
+      rolimonsResults
+        .flat()
+        .map((player) => Number(player?.userId))
+        .filter((userId) => Number.isInteger(userId) && userId > 0),
+    ),
+  ];
+  addCandidatesToPool(
+    rolimonsUserIds,
+    "Rolimon's player search",
+    Date.now(),
+  );
+
+  return {
+    userSearch: robloxUserIds.length,
+    rolimonsSearch: rolimonsUserIds.length,
+  };
+}
+
 async function refreshGeneralCandidatePool() {
+  await ensureCandidateDatabaseHydrated();
   const now = Date.now();
 
   // Highest-signal source: users already verified by /scan at the configured RAP threshold.
@@ -3419,6 +3496,46 @@ async function refreshGeneralCandidatePool() {
     lastLeaderboardRefreshAt = now;
   }
 
+  let searchStats = {
+    userSearch: 0,
+    rolimonsSearch: 0,
+  };
+  if (now - lastSearchRefreshAt >= SEARCH_REFRESH_INTERVAL_MS) {
+    searchStats = await refreshSearchCandidateSources().catch((error) => {
+      console.warn("Public player-search discovery failed:", error);
+      return searchStats;
+    });
+    lastSearchRefreshAt = now;
+  }
+
+  let groupStats = {
+    groupSearchMembers: 0,
+    groupGraphMembers: 0,
+    friendGroupMembers: 0,
+    primaryGroupMembers: 0,
+    groupOwners: 0,
+    groupWallPosters: 0,
+    allyGroupMembers: 0,
+    enemyGroupMembers: 0,
+    ps99Public: 0,
+  };
+  if (
+    now >= discoveryApiBackoffUntil &&
+    now - lastGroupRefreshAt >= GROUP_REFRESH_INTERVAL_MS
+  ) {
+    groupStats = await refreshGroupCandidateSources().catch((error) => {
+      if (Number(error?.status) === 429) {
+        discoveryApiBackoffUntil = Math.max(
+          discoveryApiBackoffUntil,
+          Date.now() + DEFAULT_PRESENCE_API_BACKOFF_MS,
+        );
+      }
+      console.warn("Roblox group discovery failed:", error);
+      return groupStats;
+    });
+    lastGroupRefreshAt = now;
+  }
+
   // Public Roblox Marketplace collectible owners add Roblox-native candidates
   // that do not have to be advertising a trade.
   let marketplaceStats = {
@@ -3459,6 +3576,7 @@ async function refreshGeneralCandidatePool() {
   const ps99PublicUserIds = await refreshPs99PublicCandidates(now);
 
   pruneCandidatePool();
+  await persistCandidateDatabaseSnapshot();
 
   return {
     ...getPoolSourceCounts(),
@@ -3468,6 +3586,8 @@ async function refreshGeneralCandidatePool() {
     leaderboard: leaderboardUserIds.length,
     jailbreakTrades: jailbreakTradeUserIds.length,
     ps99Public: ps99PublicUserIds.length,
+    ...searchStats,
+    ...groupStats,
     ...marketplaceStats,
   };
 }
@@ -5418,6 +5538,7 @@ function getPoolSourceCounts() {
     ["Jailbreak Trading Network public trade listings", "jailbreakTrades"],
     ["Rolimon's player search", "rolimonsSearch"],
     ["Rolimon's value leaderboard", "leaderboard"],
+    ["Pet Simulator 99 official public API", "ps99Public"],
     [
       "Rolimon's limited catalog + Roblox public asset owners",
       "limitedOwners",
