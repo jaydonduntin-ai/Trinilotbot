@@ -7,7 +7,10 @@ import {
   getUserSocialCounts,
   lookupRobloxUser,
 } from "./api.js";
-import { getFollowUserJoinUrl, getOpenGameUrl, getPublicJoinUrl } from "./game-session.js";
+import {
+  getOpenGameUrl,
+  getVerifiedPlayerJoinUrl,
+} from "./game-session.js";
 import { getInventorySummary } from "./inventory.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
 import { enrichInventoryWithRolimons } from "../sources/rolimons-items.js";
@@ -154,7 +157,6 @@ async function buildCurrentGame(presence, userId) {
     placeId,
     gameId: presence.gameId ?? null,
     gameUrl: getOpenGameUrl(placeId),
-    followJoinUrl: getFollowUserJoinUrl(userId),
-    joinUrl: await getPublicJoinUrl(presence),
+    verifiedJoinUrl: getVerifiedPlayerJoinUrl(userId),
   };
 }
