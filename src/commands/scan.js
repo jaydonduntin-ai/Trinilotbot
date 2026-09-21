@@ -38,7 +38,7 @@ export const scanCommand = {
       option
         .setName("limit")
         .setDescription(
-          `Optional qualified-user cap; omit to scan all available unseen candidates this pass (max manual cap ${MAX_MANUAL_SCAN_LIMIT.toLocaleString()}).`,
+          `Optional qualified-user cap; omit for exhaustive/resumable scanning. Max: ${MAX_MANUAL_SCAN_LIMIT.toLocaleString()}.`,
         )
         .setMinValue(1)
         .setMaxValue(MAX_MANUAL_SCAN_LIMIT),

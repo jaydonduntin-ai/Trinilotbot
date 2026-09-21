@@ -108,5 +108,23 @@ test("/scan is exhaustive by default and keeps an optional manual cap", () => {
   assert.ok(limit);
   assert.equal(limit.required, false);
   assert.equal(limit.max_value, 5000);
-  assert.match(limit.description, /omit to scan all available unseen candidates/i);
+  assert.match(limit.description, /omit for exhaustive\/resumable scanning/i);
+});
+
+
+test("Discord command and option descriptions stay within 100 characters", () => {
+  for (const command of commandModules) {
+    const definition = command.definition.toJSON();
+    assert.ok(
+      definition.description.length <= 100,
+      `/${definition.name} description exceeds Discord's 100-character limit`,
+    );
+
+    for (const option of definition.options ?? []) {
+      assert.ok(
+        option.description.length <= 100,
+        `/${definition.name} ${option.name} description exceeds Discord's 100-character limit`,
+      );
+    }
+  }
 });
