@@ -42,6 +42,10 @@ import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
 import { getRblxValueProfile } from "../providers/rblxvalue.js";
 import { getScanWatchlist } from "../storage/scan-watchlist.js";
+import {
+  loadCandidateDatabase,
+  saveCandidateDatabase,
+} from "../storage/candidate-database.js";
 import { addMm2ValuePlayers } from "../storage/mm2-value-watchlist.js";
 import {
   addScanAttemptIds,
@@ -102,8 +106,8 @@ const DEFAULT_GAME_SCAN_CANDIDATES = 500;
 const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 25_000;
 const DEFAULT_GAME_SCAN_WAVE_SIZE = 250;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
-const DEFAULT_POOL_MAX_SIZE = 5_000;
-const DEFAULT_POOL_TTL_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_POOL_MAX_SIZE = 25_000;
+const DEFAULT_POOL_TTL_MS = 48 * 60 * 60 * 1000;
 const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
 const TARGET_POOL_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const LIMITED_OWNER_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
@@ -192,6 +196,9 @@ const scanReservedIds = new Set();
 const scanAttemptedByThreshold = new Map();
 let targetHistoryHydrated = false;
 let targetHistoryHydratePromise = null;
+let candidateDatabaseHydrated = false;
+let candidateDatabaseHydratePromise = null;
+let candidateDatabaseWritePromise = Promise.resolve();
 let targetPoolWarmupTimer = null;
 let targetLiveCacheTimer = null;
 let liveTargetCursor = 0;
@@ -245,7 +252,120 @@ async function ensureTargetHistoryHydrated() {
   await targetHistoryHydratePromise;
 }
 
+async function ensureCandidateDatabaseHydrated() {
+  if (candidateDatabaseHydrated) return;
+
+  if (!candidateDatabaseHydratePromise) {
+    candidateDatabaseHydratePromise = (async () => {
+      const database = await loadCandidateDatabase();
+
+      for (const raw of database.candidates ?? []) {
+        const userId = Number(raw?.userId);
+        if (!Number.isInteger(userId) || userId <= 0) continue;
+
+        candidatePool.set(userId, {
+          userId,
+          firstSeenAt: Number(raw?.firstSeenAt) || Date.now(),
+          lastSeenAt: Number(raw?.lastSeenAt) || Date.now(),
+          lastCheckedAt: Number(raw?.lastCheckedAt) || 0,
+          lastSocialExpandedAt: Number(raw?.lastSocialExpandedAt) || 0,
+          lastFollowExpandedAt: Number(raw?.lastFollowExpandedAt) || 0,
+          lastGroupExpandedAt: Number(raw?.lastGroupExpandedAt) || 0,
+          lastFriendGroupExpandedAt:
+            Number(raw?.lastFriendGroupExpandedAt) || 0,
+          lastPrimaryGroupExpandedAt:
+            Number(raw?.lastPrimaryGroupExpandedAt) || 0,
+          lastKnownRap: Number.isFinite(Number(raw?.lastKnownRap))
+            ? Number(raw.lastKnownRap)
+            : null,
+          lastKnownRapAt: Number(raw?.lastKnownRapAt) || 0,
+          lastKnownRapSource: raw?.lastKnownRapSource ?? null,
+          lastKnownValue: Number.isFinite(Number(raw?.lastKnownValue))
+            ? Number(raw.lastKnownValue)
+            : null,
+          lastKnownValueAt: Number(raw?.lastKnownValueAt) || 0,
+          lastKnownValueSource: raw?.lastKnownValueSource ?? null,
+          sources: new Set(
+            Array.isArray(raw?.sources)
+              ? raw.sources.filter(Boolean).map(String)
+              : [],
+          ),
+        });
+      }
+
+      pruneCandidatePool();
+      candidateDatabaseHydrated = true;
+      console.info(
+        `Candidate database restored: ${candidatePool.size} active candidates from ${database.candidates?.length ?? 0} stored.`,
+      );
+    })().finally(() => {
+      candidateDatabaseHydratePromise = null;
+    });
+  }
+
+  await candidateDatabaseHydratePromise;
+}
+
+function serializeCandidate(candidate) {
+  return {
+    userId: Number(candidate.userId),
+    firstSeenAt: Number(candidate.firstSeenAt) || 0,
+    lastSeenAt: Number(candidate.lastSeenAt) || 0,
+    lastCheckedAt: Number(candidate.lastCheckedAt) || 0,
+    lastSocialExpandedAt: Number(candidate.lastSocialExpandedAt) || 0,
+    lastFollowExpandedAt: Number(candidate.lastFollowExpandedAt) || 0,
+    lastGroupExpandedAt: Number(candidate.lastGroupExpandedAt) || 0,
+    lastFriendGroupExpandedAt:
+      Number(candidate.lastFriendGroupExpandedAt) || 0,
+    lastPrimaryGroupExpandedAt:
+      Number(candidate.lastPrimaryGroupExpandedAt) || 0,
+    lastKnownRap: Number.isFinite(Number(candidate.lastKnownRap))
+      ? Number(candidate.lastKnownRap)
+      : null,
+    lastKnownRapAt: Number(candidate.lastKnownRapAt) || 0,
+    lastKnownRapSource: candidate.lastKnownRapSource ?? null,
+    lastKnownValue: Number.isFinite(Number(candidate.lastKnownValue))
+      ? Number(candidate.lastKnownValue)
+      : null,
+    lastKnownValueAt: Number(candidate.lastKnownValueAt) || 0,
+    lastKnownValueSource: candidate.lastKnownValueSource ?? null,
+    sources: [...(candidate.sources ?? [])],
+  };
+}
+
+async function persistCandidateDatabaseSnapshot() {
+  pruneCandidatePool();
+  const snapshot = [...candidatePool.values()]
+    .sort((left, right) => {
+      const priorityDelta =
+        getCandidatePriority(
+          right,
+          {
+            minimumValue: getMinimumTargetValue(),
+            minimumRap: getMinimumTargetRap(),
+          },
+        ) -
+        getCandidatePriority(
+          left,
+          {
+            minimumValue: getMinimumTargetValue(),
+            minimumRap: getMinimumTargetRap(),
+          },
+        );
+      if (priorityDelta !== 0) return priorityDelta;
+      return Number(right.lastSeenAt || 0) - Number(left.lastSeenAt || 0);
+    })
+    .map(serializeCandidate);
+
+  candidateDatabaseWritePromise = candidateDatabaseWritePromise
+    .catch(() => undefined)
+    .then(() => saveCandidateDatabase(snapshot));
+
+  return candidateDatabaseWritePromise;
+}
+
 async function refreshCandidatePoolLightweight() {
+  await ensureCandidateDatabaseHydrated();
   const now = Date.now();
   const watchlistUserIds = await syncWatchlistCandidates(now);
 
@@ -274,6 +394,7 @@ async function refreshCandidatePoolLightweight() {
   const ps99PublicUserIds = await refreshPs99PublicCandidates(now);
 
   pruneCandidatePool();
+  await persistCandidateDatabaseSnapshot();
   lastCandidatePoolRefreshAt = now;
 
   return {
@@ -324,7 +445,10 @@ export function startTargetCandidatePoolWarmup() {
   // Restore durable dedupe history before warming the verified index.
   // Give candidate discovery time to settle, then seed the live cache before
   // the slower recurring background loop begins.
-  void ensureTargetHistoryHydrated()
+  void Promise.all([
+    ensureTargetHistoryHydrated(),
+    ensureCandidateDatabaseHydrated(),
+  ])
     .then(warmCandidates)
     .then(() => {
       const initialLiveTimer = setTimeout(refreshLive, 30_000);
@@ -3131,6 +3255,8 @@ async function discoverCandidateUserIds({
   excludeUserIds = null,
   maxCandidatesOverride = null,
 } = {}) {
+  await ensureCandidateDatabaseHydrated();
+
   const maxCandidates =
     Number.isInteger(Number(maxCandidatesOverride)) &&
     Number(maxCandidatesOverride) > 0
@@ -5437,11 +5563,34 @@ function pruneCandidatePool(now = Date.now()) {
 
   if (candidatePool.size <= maxSize) return;
 
-  const oldest = [...candidatePool.values()].sort(
-    (left, right) => left.lastSeenAt - right.lastSeenAt,
+  const rankedForRemoval = [...candidatePool.values()].sort(
+    (left, right) => {
+      const priorityDelta =
+        getCandidatePriority(
+          left,
+          {
+            minimumValue: getMinimumTargetValue(),
+            minimumRap: getMinimumTargetRap(),
+          },
+        ) -
+        getCandidatePriority(
+          right,
+          {
+            minimumValue: getMinimumTargetValue(),
+            minimumRap: getMinimumTargetRap(),
+          },
+        );
+      if (priorityDelta !== 0) return priorityDelta;
+      return Number(left.lastSeenAt || 0) - Number(right.lastSeenAt || 0);
+    },
   );
 
-  for (const candidate of oldest.slice(0, candidatePool.size - maxSize)) {
+  for (
+    const candidate of rankedForRemoval.slice(
+      0,
+      candidatePool.size - maxSize,
+    )
+  ) {
     candidatePool.delete(candidate.userId);
   }
 }
