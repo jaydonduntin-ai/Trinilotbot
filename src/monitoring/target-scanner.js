@@ -33,6 +33,7 @@ import {
 } from "../sources/rolimons-items.js";
 import { getRecentTradeAdPlayers } from "../sources/rolimons-trade-ads.js";
 import { getJailbreakTradeCandidates } from "../sources/jailbreak-trading-network.js";
+import { getPs99PublicCandidateUserIds } from "../sources/ps99-public-players.js";
 import { getRolimonsLeaderboardPlayers } from "../sources/rolimons-leaderboard.js";
 import { searchRolimonsPlayers } from "../sources/rolimons-player-search.js";
 import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
@@ -68,7 +69,24 @@ const GAME_TARGETS = {
     universeId: 383310974,
     matches: ["adopt me"],
   },
+  "blade-ball": {
+    label: "Blade Ball",
+    universeId: 4777817887,
+    matches: ["blade ball"],
+  },
+  ps99: {
+    label: "Pet Simulator 99",
+    universeId: 3317771874,
+    matches: ["pet simulator 99", "pet sim 99", "ps99"],
+  },
 };
+
+const PRIORITY_GAME_KEYS = [
+  "mm2",
+  "adopt-me",
+  "blade-ball",
+  "ps99",
+];
 
 const DEFAULT_MAX_CANDIDATES = 500;
 const DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES = 500;
@@ -109,6 +127,7 @@ const FOLLOW_SEEDS_PER_REFRESH = 6;
 const ROLIMONS_SEARCH_TERMS_PER_REFRESH = 6;
 const ROLIMONS_LEADERBOARD_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const JAILBREAK_TRADE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const PS99_PUBLIC_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 20;
 const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 8 * 60 * 1000;
@@ -185,6 +204,7 @@ let lastGroupRefreshAt = 0;
 let lastLeaderboardRefreshAt = 0;
 let lastMarketplaceRefreshAt = 0;
 let lastJailbreakTradeRefreshAt = 0;
+let lastPs99PublicRefreshAt = 0;
 let limitedSeedCursor = 0;
 let candidateRefreshPromise = null;
 let lastCandidatePoolRefreshAt = 0;
@@ -247,6 +267,8 @@ async function refreshCandidatePoolLightweight() {
     lastLeaderboardRefreshAt = now;
   }
 
+  const ps99PublicUserIds = await refreshPs99PublicCandidates(now);
+
   pruneCandidatePool();
   lastCandidatePoolRefreshAt = now;
 
@@ -255,6 +277,7 @@ async function refreshCandidatePoolLightweight() {
     watchlist: watchlistUserIds.length,
     tradeAds: tradeAdUserIds.length,
     leaderboard: leaderboardUserIds.length,
+    ps99Public: ps99PublicUserIds.length,
   };
 }
 
@@ -265,7 +288,7 @@ export function startTargetCandidatePoolWarmup() {
     try {
       const stats = await refreshCandidatePool();
       console.info(
-        `Target index refresh: ${candidatePool.size} pooled · ${stats.leaderboard ?? 0} leaderboard · ${stats.watchlist ?? 0} scan-watchlist.`,
+        `Target index refresh: ${candidatePool.size} pooled · ${stats.leaderboard ?? 0} leaderboard · ${stats.ps99Public ?? 0} PS99-public · ${stats.watchlist ?? 0} scan-watchlist.`,
       );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
@@ -276,7 +299,7 @@ export function startTargetCandidatePoolWarmup() {
     try {
       const stats = await refreshCandidatePoolLightweight();
       console.info(
-        `Target index warmup: ${candidatePool.size} pooled · ${stats.leaderboard ?? 0} leaderboard · ${stats.watchlist ?? 0} scan-watchlist.`,
+        `Target index warmup: ${candidatePool.size} pooled · ${stats.leaderboard ?? 0} leaderboard · ${stats.ps99Public ?? 0} PS99-public · ${stats.watchlist ?? 0} scan-watchlist.`,
       );
     } catch (error) {
       console.warn("Lightweight target warmup failed:", error);
@@ -543,6 +566,11 @@ function getFreshLiveCachePresences({
       return true;
     })
     .sort((left, right) => {
+      const gamePriorityDelta =
+        Number(Boolean(getPriorityGameKey(right?.[1]?.presence))) -
+        Number(Boolean(getPriorityGameKey(left?.[1]?.presence)));
+      if (gamePriorityDelta !== 0) return gamePriorityDelta;
+
       const leftCandidate = candidatePool.get(Number(left[0]));
       const rightCandidate = candidatePool.get(Number(right[0]));
       return (
@@ -731,7 +759,9 @@ async function scanDiscoveredTargetsInternal({
       (cachedFallback.usedCachedPresenceFallback &&
         cachedFallback.players.length > 0)
     ) {
-      const selectedPlayers = shuffle(cachedFallback.players)
+      const selectedPlayers = sortTargetPlayersForPriority(
+        cachedFallback.players,
+      )
         .slice(0, requestedLimit)
         .map(({ qualifies, ...player }) => player);
       await rememberSurfacedTargets(selectedPlayers);
@@ -892,16 +922,12 @@ async function scanDiscoveredTargetsInternal({
       .filter(
         (presence) => Number(presence?.userPresenceType) === 2,
       )
-      .sort(
-        (left, right) =>
-          getCandidatePriority(
-            candidatePool.get(Number(right.userId)),
-            { minimumValue, minimumRap },
-          ) -
-          getCandidatePriority(
-            candidatePool.get(Number(left.userId)),
-            { minimumValue, minimumRap },
-          ),
+      .sort((left, right) =>
+        compareTargetPresences(
+          left,
+          right,
+          { minimumValue, minimumRap },
+        ),
       );
 
     for (const presence of inGamePresences) {
@@ -999,7 +1025,9 @@ async function scanDiscoveredTargetsInternal({
 
   presenceRateLimited =
     presenceRateLimited || stillInGamePlayers.rateLimited === true;
-  const selectedPlayers = shuffle(stillInGamePlayers.players)
+  const selectedPlayers = sortTargetPlayersForPriority(
+    stillInGamePlayers.players,
+  )
     .slice(0, requestedLimit)
     .map(({ qualifies, ...player }) => player);
   await rememberSurfacedTargets(selectedPlayers);
@@ -2997,6 +3025,52 @@ export function isMm2Presence(presence) {
   return isPresenceForGame(presence, GAME_TARGETS.mm2);
 }
 
+export function getPriorityGameKey(presence) {
+  if (Number(presence?.userPresenceType) !== 2) return null;
+
+  for (const key of PRIORITY_GAME_KEYS) {
+    if (isPresenceForGame(presence, GAME_TARGETS[key])) {
+      return key;
+    }
+  }
+  return null;
+}
+
+function getPriorityGameLabel(key) {
+  return key ? GAME_TARGETS[key]?.label ?? null : null;
+}
+
+function compareTargetPresences(
+  left,
+  right,
+  { minimumValue = null, minimumRap = null } = {},
+) {
+  const leftPriority = getPriorityGameKey(left) ? 1 : 0;
+  const rightPriority = getPriorityGameKey(right) ? 1 : 0;
+  if (leftPriority !== rightPriority) {
+    return rightPriority - leftPriority;
+  }
+
+  return (
+    getCandidatePriority(
+      candidatePool.get(Number(right?.userId)),
+      { minimumValue, minimumRap },
+    ) -
+    getCandidatePriority(
+      candidatePool.get(Number(left?.userId)),
+      { minimumValue, minimumRap },
+    )
+  );
+}
+
+function sortTargetPlayersForPriority(players) {
+  return [...(players ?? [])].sort((left, right) => {
+    const leftPriority = left?.priorityGameKey ? 1 : 0;
+    const rightPriority = right?.priorityGameKey ? 1 : 0;
+    return rightPriority - leftPriority;
+  });
+}
+
 function isPresenceForGame(presence, game) {
   if (Number(presence?.userPresenceType) !== 2) {
     return false;
@@ -3061,6 +3135,7 @@ async function discoverCandidateUserIds({
       "Roblox Marketplace collectible owners",
       "Rolimon's value leaderboard",
       "Rolimon's recent trade ads",
+      "Pet Simulator 99 official public API",
       "Jailbreak Trading Network public trade listings",
     ],
   };
@@ -3215,6 +3290,8 @@ async function refreshGeneralCandidatePool() {
     lastJailbreakTradeRefreshAt = now;
   }
 
+  const ps99PublicUserIds = await refreshPs99PublicCandidates(now);
+
   pruneCandidatePool();
 
   return {
@@ -3224,8 +3301,35 @@ async function refreshGeneralCandidatePool() {
     limitedOwners: limitedOwnerUserIds.length,
     leaderboard: leaderboardUserIds.length,
     jailbreakTrades: jailbreakTradeUserIds.length,
+    ps99Public: ps99PublicUserIds.length,
     ...marketplaceStats,
   };
+}
+
+async function refreshPs99PublicCandidates(now = Date.now()) {
+  if (
+    now - lastPs99PublicRefreshAt <
+    PS99_PUBLIC_REFRESH_INTERVAL_MS
+  ) {
+    return [];
+  }
+
+  try {
+    const result = await getPs99PublicCandidateUserIds();
+    const userIds = result.userIds ?? [];
+    addCandidatesToPool(
+      userIds,
+      "Pet Simulator 99 official public API",
+      now,
+    );
+    lastPs99PublicRefreshAt = now;
+    return userIds;
+  } catch (error) {
+    // Keep the source independent. A PS99 outage must never break /target.
+    lastPs99PublicRefreshAt = now;
+    console.warn("PS99 public candidate discovery failed:", error);
+    return [];
+  }
 }
 
 async function refreshJailbreakTradeCandidates() {
@@ -4388,6 +4492,8 @@ function buildTargetJoinability(presence, userId) {
   const normalizedUserId = Number(userId);
   const placeId = Number(presence?.placeId);
   const gameId = presence?.gameId ? String(presence.gameId) : null;
+  const universeId = Number(presence?.universeId);
+  const priorityGameKey = getPriorityGameKey(presence);
   const normalizedPlaceId =
     Number.isInteger(placeId) && placeId > 0 ? placeId : null;
   const exactJoinUrl =
@@ -4403,6 +4509,10 @@ function buildTargetJoinability(presence, userId) {
   return {
     placeId: normalizedPlaceId,
     gameId,
+    universeId:
+      Number.isInteger(universeId) && universeId > 0 ? universeId : null,
+    priorityGameKey,
+    priorityGameLabel: getPriorityGameLabel(priorityGameKey),
     followJoinUrl,
     exactJoinUrl,
     joinReady: Boolean(exactJoinUrl || followJoinUrl),
@@ -5102,8 +5212,12 @@ function getCandidatePriority(
   const sources = candidate?.sources ?? new Set();
   let score = 0;
 
-  if (liveTargetCache.has(Number(candidate?.userId))) {
+  const liveEntry = liveTargetCache.get(Number(candidate?.userId));
+  if (liveEntry) {
     score += 1_000;
+    if (getPriorityGameKey(liveEntry.presence)) {
+      score += 600;
+    }
   }
 
   if (
@@ -5131,6 +5245,7 @@ function getCandidatePriority(
     ],
     ["Roblox Marketplace collectible owners", 100],
     ["Rolimon's recent trade ads", 95],
+    ["Pet Simulator 99 official public API", 170],
     ["Rolimon's player search", 80],
     ["Roblox Marketplace creators", 55],
     ["Roblox public group owners", 45],

@@ -158,6 +158,7 @@ function buildTargetEmbeds(result) {
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
         `Requested: ${result.requestedLimit ?? result.players.length} · Returned: ${result.players.length}`,
+        formatPriorityGameSummary(result.players),
         `Join-ready: ${result.joinReadyCount ?? 0} · Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.expansion?.failed
           ? "Expansion scan: unavailable · live discovery continued"
@@ -269,6 +270,25 @@ function formatTargetJoin(player) {
     links.join(" · "),
     ids.join(" · "),
   ].filter(Boolean).join("\n");
+}
+
+function formatPriorityGameSummary(players) {
+  const counts = new Map();
+  for (const player of players ?? []) {
+    const label = player?.priorityGameLabel;
+    if (!label) continue;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+
+  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  if (total === 0) {
+    return "Priority games: 0 returned · all-game discovery stayed open";
+  }
+
+  const breakdown = [...counts.entries()]
+    .map(([label, count]) => `${label} ${count}`)
+    .join(" · ");
+  return `Priority games: ${total} returned · ${breakdown}`;
 }
 
 function formatThresholds(result) {

@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getPresenceBatched } from "../src/monitoring/target-scanner.js";
+import {
+  getPresenceBatched,
+  getPriorityGameKey,
+} from "../src/monitoring/target-scanner.js";
 
 test("presence batches retry IDs omitted from a partial response", async () => {
   let calls = 0;
@@ -97,4 +100,40 @@ test("game instance join helper builds exact JobId bridge URLs", async () => {
       process.env.ROBLOX_JOIN_BRIDGE_BASE_URL = previousBridge;
     }
   }
+});
+
+
+test("priority games recognize MM2, Adopt Me, Blade Ball, and PS99", () => {
+  assert.equal(
+    getPriorityGameKey({ userPresenceType: 2, universeId: 66654135 }),
+    "mm2",
+  );
+  assert.equal(
+    getPriorityGameKey({ userPresenceType: 2, universeId: 383310974 }),
+    "adopt-me",
+  );
+  assert.equal(
+    getPriorityGameKey({ userPresenceType: 2, universeId: 4777817887 }),
+    "blade-ball",
+  );
+  assert.equal(
+    getPriorityGameKey({ userPresenceType: 2, universeId: 3317771874 }),
+    "ps99",
+  );
+  assert.equal(
+    getPriorityGameKey({
+      userPresenceType: 2,
+      universeId: 999,
+      lastLocation: "Pet Simulator 99!",
+    }),
+    "ps99",
+  );
+  assert.equal(
+    getPriorityGameKey({
+      userPresenceType: 2,
+      universeId: 999,
+      lastLocation: "Blox Fruits",
+    }),
+    null,
+  );
 });
