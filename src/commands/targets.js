@@ -96,6 +96,10 @@ export const targetsCommand = {
       result.expansion = expansion;
       result.requestedLimit = limit;
 
+      console.info(
+        `/target diagnostic: pool=${result.candidatePoolSize ?? 0} · candidates=${result.candidateCount ?? 0} · presenceChecked=${result.presenceScannedCount ?? 0} · inGame=${result.activeCount ?? 0} · prePublicVerified=${result.preRecheckVerifiedCount ?? 0} · publicJoinable=${result.players.length} · hiddenNonPublic=${result.nonPublicServerCount ?? 0} · publicVerifyErrors=${result.publicServerVerificationErrorCount ?? 0} · rateLimited=${result.presenceRateLimited === true}`,
+      );
+
       const embeds = buildTargetEmbeds(result);
       const embedBatches = batchEmbedsForDiscord(embeds);
       const content =

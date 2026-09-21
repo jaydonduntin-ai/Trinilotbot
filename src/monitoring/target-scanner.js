@@ -95,9 +95,9 @@ const PRIORITY_GAME_KEYS = [
 ];
 
 const DEFAULT_MAX_CANDIDATES = 500;
-const DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES = 500;
+const DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES = 2_500;
 const DEFAULT_TARGET_SCAN_WAVE_SIZE = 250;
-const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 45_000;
+const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 90_000;
 const DEFAULT_TRUSTED_RAP_TTL_MS = 15 * 60 * 1000;
 const FINAL_RECHECK_BATCH_SIZE = 10;
 const PUBLIC_SERVER_VERIFY_CONCURRENCY = 2;
@@ -562,32 +562,29 @@ export async function refreshTargetLiveCache() {
     };
   }
 
-  // Recheck currently-live users and /scan watchlist members every cycle.
-  const mandatory = [];
-  const mandatorySeen = new Set();
-  const pushMandatory = (userId) => {
-    const id = Number(userId);
+  // Always recheck users already known to be live, then rotate through the
+  // full remaining verified RAP index. This prevents a large /scan watchlist
+  // from pinning the same first 100 users on every background cycle.
+  const stickyLive = [];
+  const stickySeen = new Set();
+  for (const rawUserId of liveTargetCache.keys()) {
+    const userId = Number(rawUserId);
     if (
-      !Number.isInteger(id) ||
-      id <= 0 ||
-      mandatorySeen.has(id) ||
-      !verifiedIds.includes(id)
+      Number.isInteger(userId) &&
+      userId > 0 &&
+      verifiedIds.includes(userId) &&
+      !stickySeen.has(userId)
     ) {
-      return;
-    }
-    mandatorySeen.add(id);
-    mandatory.push(id);
-  };
-
-  for (const userId of liveTargetCache.keys()) pushMandatory(userId);
-  for (const candidate of verifiedCandidates) {
-    if (candidate.sources?.has("Verified /scan RAP watchlist")) {
-      pushMandatory(candidate.userId);
+      stickySeen.add(userId);
+      stickyLive.push(userId);
     }
   }
 
-  const rotating = verifiedIds.filter((userId) => !mandatorySeen.has(userId));
-  const remainingSlots = Math.max(0, scanLimit - mandatory.length);
+  const rotating = verifiedIds.filter((userId) => !stickySeen.has(userId));
+  const remainingSlots = Math.max(
+    0,
+    scanLimit - Math.min(stickyLive.length, scanLimit),
+  );
   const selectedRotating = [];
 
   if (rotating.length > 0 && remainingSlots > 0) {
@@ -604,11 +601,8 @@ export async function refreshTargetLiveCache() {
   }
 
   const selectedIds = [
-    ...mandatory.slice(0, scanLimit),
-    ...selectedRotating.slice(
-      0,
-      Math.max(0, scanLimit - mandatory.length),
-    ),
+    ...stickyLive.slice(0, scanLimit),
+    ...selectedRotating,
   ];
 
   const presenceScan = await getPresenceBatched(selectedIds, {
@@ -872,7 +866,9 @@ async function scanDiscoveredTargetsInternal({
     limit: Math.min(MAX_TARGETS + 5, requestedLimit + 5),
   });
 
-  if (cachedPresences.length >= requestedLimit) {
+  let cachedJoinablePlayers = [];
+
+  if (cachedPresences.length > 0) {
     const cachedResults = await mapWithConcurrency(
       cachedPresences,
       VERIFY_CONCURRENCY,
@@ -888,6 +884,8 @@ async function scanDiscoveredTargetsInternal({
     const finalCached = await revalidateCurrentlyInGame(
       cachedVerified,
     );
+
+    cachedJoinablePlayers = finalCached.players;
 
     if (finalCached.players.length >= requestedLimit) {
       const selectedPlayers = sortTargetPlayersForPriority(
@@ -949,8 +947,8 @@ async function scanDiscoveredTargetsInternal({
   // interactive request, while leaving the background live cache at its
   // conservative 150-user cycle.
   const maxPresenceCandidates = Math.min(
-    1_000,
-    Math.max(configuredPresenceCandidates, requestedLimit * 20),
+    2_500,
+    Math.max(configuredPresenceCandidates, requestedLimit * 40),
   );
   const waveSize = Math.max(
     50,
@@ -1017,7 +1015,10 @@ async function scanDiscoveredTargetsInternal({
     "ROBLOX_TARGET_MAX_ACTIVE_TO_VERIFY",
     DEFAULT_MAX_ACTIVE_TO_VERIFY,
   );
-  const verificationBuffer = Math.min(MAX_TARGETS + 5, requestedLimit + 5);
+  const verificationBuffer = Math.min(
+    maxActiveToVerify,
+    Math.max(requestedLimit * 3, requestedLimit + 25),
+  );
 
   for (
     let offset = 0;
@@ -1149,8 +1150,19 @@ async function scanDiscoveredTargetsInternal({
 
   presenceRateLimited =
     presenceRateLimited || stillInGamePlayers.rateLimited === true;
+  const mergedJoinableById = new Map();
+  for (const player of [
+    ...cachedJoinablePlayers,
+    ...stillInGamePlayers.players,
+  ]) {
+    const userId = Number(player?.id ?? player?.userId);
+    if (Number.isInteger(userId) && userId > 0) {
+      mergedJoinableById.set(userId, player);
+    }
+  }
+
   const selectedPlayers = sortTargetPlayersForPriority(
-    stillInGamePlayers.players,
+    [...mergedJoinableById.values()],
   )
     .slice(0, requestedLimit)
     .map(({ qualifies, ...player }) => player);
@@ -1167,7 +1179,7 @@ async function scanDiscoveredTargetsInternal({
     candidateSourceCounts: discovery.candidateSourceCounts,
     presenceScannedCount,
     activeCount: activeSeen.size,
-    verifiedCount: stillInGamePlayers.players.length,
+    verifiedCount: mergedJoinableById.size,
     finalPresenceLeftGameCount: stillInGamePlayers.leftGameCount,
     finalPresenceUnavailableCount: stillInGamePlayers.unavailableCount,
     nonPublicServerCount: stillInGamePlayers.nonPublicServerCount ?? 0,
@@ -1186,8 +1198,8 @@ async function scanDiscoveredTargetsInternal({
     profileUnavailableCount,
     verificationErrorCount,
     preRecheckVerifiedCount: verifiedPlayers.length,
-    joinReadyCount: stillInGamePlayers.players.filter((player) => player.joinReady).length,
-    publicServerConfirmedCount: stillInGamePlayers.players.filter((player) => player.publicServerConfirmed).length,
+    joinReadyCount: [...mergedJoinableById.values()].filter((player) => player.joinReady).length,
+    publicServerConfirmedCount: [...mergedJoinableById.values()].filter((player) => player.publicServerConfirmed).length,
     liveCacheHit: false,
     liveCacheSize: liveTargetCache.size,
     verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
