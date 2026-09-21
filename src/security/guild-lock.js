@@ -91,6 +91,16 @@ async function loadStoredGuildIds() {
   }
 }
 
+export async function setAllowedGuildIds(guildIds) {
+  const normalized = new Set(
+    [...(guildIds ?? [])]
+      .map((value) => String(value ?? "").trim())
+      .filter((value) => /^\d+$/.test(value)),
+  );
+  await persistAllowedGuildIds(normalized);
+  return normalized;
+}
+
 async function persistAllowedGuildIds(guildIds) {
   const payload = {
     version: 1,

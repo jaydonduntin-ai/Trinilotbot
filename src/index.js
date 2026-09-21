@@ -9,6 +9,7 @@ import { startJoinBridge } from "./web/join-bridge.js";
 import {
   isGuildAllowed,
   resolveAllowedGuildIds,
+  setAllowedGuildIds,
 } from "./security/guild-lock.js";
 
 startJoinBridge();
@@ -43,11 +44,44 @@ const MAX_HEAVY_COMMANDS = readPositiveInteger(
 );
 let activeHeavyCommands = 0;
 let allowedGuildIds = new Set();
+let applicationManagerUserIds = new Set();
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.info(`Discord connected as ${readyClient.user.tag}`);
 
   const rest = new REST({ version: "10" }).setToken(token);
+
+  try {
+    const response = await fetch(
+      "https://discord.com/api/v10/applications/@me",
+      {
+        headers: { Authorization: `Bot ${token}` },
+      },
+    );
+    if (response.ok) {
+      const application = await response.json();
+      const managerIds = new Set();
+      const ownerId = application?.owner?.id;
+      const teamOwnerId = application?.team?.owner_user_id;
+      if (ownerId) managerIds.add(String(ownerId));
+      if (teamOwnerId) managerIds.add(String(teamOwnerId));
+      for (const member of application?.team?.members ?? []) {
+        if (member?.user?.id && Number(member?.membership_state) === 2) {
+          managerIds.add(String(member.user.id));
+        }
+      }
+      applicationManagerUserIds = managerIds;
+      console.info(
+        `Discord application managers resolved: ${applicationManagerUserIds.size}.`,
+      );
+    } else {
+      console.warn(
+        `Could not resolve Discord application managers: HTTP ${response.status}.`,
+      );
+    }
+  } catch (error) {
+    console.warn("Could not resolve Discord application managers:", error);
+  }
 
   try {
     const lock = await resolveAllowedGuildIds(
@@ -56,9 +90,30 @@ client.once(Events.ClientReady, async (readyClient) => {
     allowedGuildIds = lock.guildIds;
 
     if (allowedGuildIds.size === 0) {
-      console.error(
-        "Discord guild lock could not resolve an allowed guild. Set DISCORD_ALLOWED_GUILD_IDS before inviting the bot anywhere else.",
+      console.warn(
+        "Discord guild lock is waiting for a trusted guild bootstrap.",
       );
+
+      const delayedGuildBootstrap = setTimeout(async () => {
+        if (allowedGuildIds.size > 0) return;
+        try {
+          const retry = await resolveAllowedGuildIds(
+            [...readyClient.guilds.cache.keys()],
+          );
+          if (retry.guildIds.size === 1) {
+            allowedGuildIds = retry.guildIds;
+            console.info(
+              `Discord guild lock bootstrapped after gateway sync: ${allowedGuildIds.size} allowed guild.`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            "Delayed Discord guild-lock bootstrap failed:",
+            error,
+          );
+        }
+      }, 5_000);
+      delayedGuildBootstrap.unref?.();
     } else {
       console.info(
         `Discord guild lock active: ${allowedGuildIds.size} allowed guild(s) · source=${lock.source}${lock.bootstrapped ? " · bootstrapped" : ""}.`,
@@ -148,9 +203,8 @@ client.once(Events.ClientReady, async (readyClient) => {
 client.on(Events.GuildCreate, async (guild) => {
   if (allowedGuildIds.size === 0) {
     console.warn(
-      `New guild ${guild.id} joined before the guild lock was resolved; leaving it.`,
+      `Guild ${guild.id} became available while the private guild lock is unresolved; waiting for owner bootstrap.`,
     );
-    await guild.leave().catch(() => {});
     return;
   }
 
@@ -185,6 +239,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (!interaction.isChatInputCommand()) return;
+
+  if (
+    allowedGuildIds.size === 0 &&
+    interaction.guildId &&
+    applicationManagerUserIds.has(String(interaction.user.id))
+  ) {
+    try {
+      allowedGuildIds = await setAllowedGuildIds([
+        interaction.guildId,
+      ]);
+      console.info(
+        "Discord guild lock bootstrapped from an application-manager interaction.",
+      );
+    } catch (error) {
+      console.error(
+        "Failed to persist Discord guild lock from owner interaction:",
+        error,
+      );
+    }
+  }
 
   if (
     !interaction.guildId ||
