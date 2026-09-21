@@ -140,11 +140,13 @@ const SEARCH_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 20;
 const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 8 * 60 * 1000;
-const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 150;
-const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 1_200;
+const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 100;
+const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 2_500;
 const DEFAULT_TARGET_LIVE_CACHE_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_PRESENCE_API_BACKOFF_MS = 3 * 60 * 1000;
 const DEFAULT_FALLBACK_PRESENCE_BACKOFF_MS = 5 * 60 * 1000;
+const DEFAULT_PRESENCE_TIMEOUT_BACKOFF_MS = 90_000;
+const DEFAULT_FALLBACK_TIMEOUT_BACKOFF_MS = 2 * 60 * 1000;
 const GROUP_SEARCH_TERMS_PER_REFRESH = 3;
 const GROUPS_PER_SEARCH_TERM = 2;
 const GROUP_MEMBERSHIP_SEEDS_PER_REFRESH = 4;
@@ -1726,6 +1728,8 @@ export async function scanCandidatesForWatchlist({
   if (reservedIds.length > 0) {
     await addScanReservedIds(reservedIds);
   }
+
+  await persistCandidateDatabaseSnapshot();
 
   return {
     players: selectedPlayers,
@@ -5400,7 +5404,43 @@ async function getPresenceBatchedUnlocked(
           break;
         }
 
-        const retryable = status === 408 || status >= 500;
+        const timedOut =
+          error?.name === "TimeoutError" ||
+          /timeout/i.test(String(error?.message ?? ""));
+        const retryable = status === 408 || status >= 500 || timedOut;
+
+        if (timedOut) {
+          rateLimited = true;
+          const usingFallbackRoute =
+            presenceFetcher === getUsersPresenceFallback;
+
+          if (usingFallbackRoute) {
+            fallbackPresenceBackoffUntil = Math.max(
+              fallbackPresenceBackoffUntil,
+              Date.now() +
+                getPositiveIntegerEnv(
+                  "ROBLOX_FALLBACK_TIMEOUT_BACKOFF_MS",
+                  DEFAULT_FALLBACK_TIMEOUT_BACKOFF_MS,
+                ),
+            );
+            console.warn(
+              "Public presence fallback timed out; entering fallback backoff.",
+            );
+          } else {
+            presenceApiBackoffUntil = Math.max(
+              presenceApiBackoffUntil,
+              Date.now() +
+                getPositiveIntegerEnv(
+                  "ROBLOX_PRESENCE_TIMEOUT_BACKOFF_MS",
+                  DEFAULT_PRESENCE_TIMEOUT_BACKOFF_MS,
+                ),
+            );
+            console.warn(
+              "Roblox presence API timed out; entering official-route backoff.",
+            );
+          }
+          break;
+        }
 
         if (!retryable || attempt >= maxAttempts - 1) {
           console.warn("Roblox presence batch failed:", error);
