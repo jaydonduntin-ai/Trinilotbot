@@ -123,7 +123,7 @@ function buildDeveloperEmbed(player) {
     ? `[Join player](<${player.followJoinUrl}>)`
     : "Unavailable";
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(`${player.displayName} (@${player.username})`)
     .setURL(player.profileUrl)
@@ -159,8 +159,12 @@ function buildDeveloperEmbed(player) {
         value: join,
         inline: false,
       },
-    )
-    .setThumbnail(player.avatarUrl ?? null);
+    );
+
+  if (player.avatarUrl) {
+    embed.setThumbnail(player.avatarUrl);
+  }
+  return embed;
 }
 
 function truncate(value, max) {

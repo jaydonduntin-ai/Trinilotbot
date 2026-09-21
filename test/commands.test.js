@@ -53,7 +53,7 @@ test("/rbx2mm2 is RAP-only with a 450K minimum", () => {
 });
 
 
-test("/target and /scan expose 150K RAP and value floors", () => {
+test("/target, /scan, and /dev expose 150K RAP and value floors", () => {
   for (const name of ["target", "scan", "dev"]) {
     const command = commandModules.find(
       (candidate) => candidate.definition.name === name,
