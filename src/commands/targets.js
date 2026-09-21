@@ -246,24 +246,20 @@ function buildTargetEmbeds(result) {
 function formatTargetJoin(player) {
   const links = [];
 
-  if (player.exactJoinUrl) {
-    links.push(`[Join exact server](<${player.exactJoinUrl}>)`);
+  if (player.verifiedJoinUrl) {
+    links.push(`[Verify & join current server](<${player.verifiedJoinUrl}>)`);
   }
-  if (player.followJoinUrl) {
-    links.push(`[Follow-join fallback](<${player.followJoinUrl}>)`);
+  if (player.profileUrl) {
+    links.push(`[Open profile](<${player.profileUrl}>)`);
   }
 
   const ids = [];
   if (player.placeId) ids.push(`Place: \`${player.placeId}\``);
   if (player.gameId) ids.push(`Job: \`${player.gameId}\``);
 
-  const status = player.exactJoinUrl
-    ? "Exact server JobId captured from live presence"
-    : player.publicServerConfirmed
-      ? "Public server confirmed"
-      : player.joinReady
-        ? "Profile follow-join available"
-        : "Join unavailable";
+  const status = player.verifiedJoinUrl
+    ? "Server is rechecked for public access when you tap Join"
+    : "Join unavailable";
 
   return [
     status,

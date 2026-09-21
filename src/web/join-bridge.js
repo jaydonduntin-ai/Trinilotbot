@@ -1,4 +1,9 @@
 import { createServer } from "node:http";
+import {
+  getUserPresence,
+  getUsersPresenceFallback,
+  isPublicGameInstance,
+} from "../roblox/api.js";
 
 let server = null;
 
@@ -7,7 +12,7 @@ export function startJoinBridge() {
 
   const port = Number(process.env.PORT) || 3000;
 
-  server = createServer((req, res) => {
+  server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
 
@@ -18,6 +23,85 @@ export function startJoinBridge() {
         });
         res.end("ok");
         return;
+      }
+
+      const verifiedUserMatch = url.pathname.match(
+        /^\/join\/verified-user\/(\d+)$/,
+      );
+      if (verifiedUserMatch) {
+        const userId = Number(verifiedUserMatch[1]);
+        if (!Number.isInteger(userId) || userId <= 0) {
+          return sendNotFound(res);
+        }
+
+        let presence = null;
+        try {
+          presence = await getUserPresence(userId);
+        } catch (error) {
+          if (Number(error?.status) === 429) {
+            try {
+              presence = (await getUsersPresenceFallback([userId]))?.[0] ?? null;
+            } catch (fallbackError) {
+              console.warn(
+                "Verified join presence fallback failed:",
+                fallbackError,
+              );
+            }
+          } else {
+            console.warn("Verified join presence lookup failed:", error);
+          }
+        }
+
+        if (
+          Number(presence?.userPresenceType) !== 2 ||
+          !presence?.placeId ||
+          !presence?.gameId
+        ) {
+          return sendUnavailableJoinPage(res, {
+            title: "Player is not publicly joinable",
+            message:
+              "Roblox no longer reports this user in a specific game server. They may have left, moved servers, or hidden join details.",
+            profileUrl:
+              `https://www.roblox.com/users/${encodeURIComponent(userId)}/profile`,
+          });
+        }
+
+        let publicServer = false;
+        try {
+          publicServer = await isPublicGameInstance(
+            presence.placeId,
+            presence.gameId,
+            {
+              maxPages: Number(
+                process.env.ROBLOX_JOIN_VERIFY_MAX_PAGES ?? 10,
+              ),
+            },
+          );
+        } catch (error) {
+          console.warn("Verified join public-server lookup failed:", error);
+        }
+
+        if (!publicServer) {
+          return sendUnavailableJoinPage(res, {
+            title: "Current server is not publicly joinable",
+            message:
+              "The player is in-game, but Roblox did not expose that JobId in the public-server list. It may be private, reserved, restricted, or no longer current.",
+            profileUrl:
+              `https://www.roblox.com/users/${encodeURIComponent(userId)}/profile`,
+            gameUrl:
+              `https://www.roblox.com/games/${encodeURIComponent(presence.placeId)}`,
+          });
+        }
+
+        return sendJoinPage(res, {
+          title: "Join verified Roblox server",
+          appUrl:
+            `roblox://placeId=${encodeURIComponent(presence.placeId)}` +
+            `&gameInstanceId=${encodeURIComponent(presence.gameId)}`,
+          fallbackUrl:
+            `https://www.roblox.com/games/${encodeURIComponent(presence.placeId)}`,
+          fallbackLabel: "Open experience page",
+        });
       }
 
       const userMatch = url.pathname.match(/^\/join\/user\/(\d+)$/);
@@ -131,6 +215,51 @@ function sendJoinPage(
   <script>
     window.location.href = ${JSON.stringify(appUrl)};
   </script>
+</body>
+</html>`;
+
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store, max-age=0",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+  });
+  res.end(html);
+}
+
+
+function sendUnavailableJoinPage(
+  res,
+  { title, message, profileUrl, gameUrl = null },
+) {
+  const safeTitle = escapeHtml(title);
+  const safeMessage = escapeHtml(message);
+  const safeProfileUrl = escapeHtml(profileUrl);
+  const safeGameUrl = gameUrl ? escapeHtml(gameUrl) : null;
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow">
+  <title>${safeTitle}</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0d10; color:#fff; }
+    main { width:min(92vw,440px); padding:28px; box-sizing:border-box; text-align:center; }
+    h1 { font-size:24px; margin:0 0 12px; }
+    p { color:#b9bec7; line-height:1.5; }
+    a { display:block; padding:16px 18px; margin-top:14px; border-radius:12px; text-decoration:none; font-weight:700; background:#23272f; color:#fff; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${safeTitle}</h1>
+    <p>${safeMessage}</p>
+    ${safeGameUrl ? `<a href="${safeGameUrl}">Open experience</a>` : ""}
+    <a href="${safeProfileUrl}">Open Roblox profile</a>
+  </main>
 </body>
 </html>`;
 

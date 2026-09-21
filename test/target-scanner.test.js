@@ -137,3 +137,26 @@ test("priority games recognize MM2, Adopt Me, Blade Ball, and PS99", () => {
     null,
   );
 });
+
+
+test("verified player join helper builds click-time verification URL", async () => {
+  const previousBridge = process.env.ROBLOX_JOIN_BRIDGE_BASE_URL;
+  process.env.ROBLOX_JOIN_BRIDGE_BASE_URL = "https://example.test";
+
+  try {
+    const { getVerifiedPlayerJoinUrl } = await import(
+      "../src/roblox/game-session.js"
+    );
+    assert.equal(
+      getVerifiedPlayerJoinUrl(123456),
+      "https://example.test/join/verified-user/123456",
+    );
+    assert.equal(getVerifiedPlayerJoinUrl(0), null);
+  } finally {
+    if (previousBridge === undefined) {
+      delete process.env.ROBLOX_JOIN_BRIDGE_BASE_URL;
+    } else {
+      process.env.ROBLOX_JOIN_BRIDGE_BASE_URL = previousBridge;
+    }
+  }
+});

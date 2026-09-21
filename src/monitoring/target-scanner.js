@@ -25,6 +25,7 @@ import { getInventorySummary } from "../roblox/inventory.js";
 import {
   getFollowUserJoinUrl,
   getGameInstanceJoinUrl,
+  getVerifiedPlayerJoinUrl,
 } from "../roblox/game-session.js";
 import { getRolimonsPlayerSource } from "../sources/rolimons.js";
 import {
@@ -4501,11 +4502,11 @@ function buildTargetJoinability(presence, userId) {
       ? getGameInstanceJoinUrl(normalizedPlaceId, gameId)
       : null;
   const followJoinUrl = getFollowUserJoinUrl(normalizedUserId);
+  const verifiedJoinUrl = getVerifiedPlayerJoinUrl(normalizedUserId);
 
-  // Prefer the exact JobId captured from the same presence response. This
-  // avoids asking Roblox to resolve the followed user's server again at click
-  // time. Follow-user remains a fallback if the instance moved or is not
-  // accessible to the joining account.
+  // Presence can expose a JobId that is private/reserved or stale by click
+  // time. The displayed join button therefore resolves the user again and
+  // verifies the current JobId against Roblox's public-server list on click.
   return {
     placeId: normalizedPlaceId,
     gameId,
@@ -4515,13 +4516,12 @@ function buildTargetJoinability(presence, userId) {
     priorityGameLabel: getPriorityGameLabel(priorityGameKey),
     followJoinUrl,
     exactJoinUrl,
-    joinReady: Boolean(exactJoinUrl || followJoinUrl),
+    verifiedJoinUrl,
+    joinReady: Boolean(verifiedJoinUrl),
     publicServerConfirmed: false,
-    joinabilityStatus: exactJoinUrl
-      ? "Exact live instance available"
-      : followJoinUrl
-        ? "Profile follow-join available"
-        : "Unavailable",
+    joinabilityStatus: verifiedJoinUrl
+      ? "Public server will be reverified on click"
+      : "Unavailable",
   };
 }
 

@@ -14,6 +14,20 @@ export function getFollowUserJoinUrl(userId) {
   return `https://www.roblox.com/users/${encodeURIComponent(normalizedUserId)}/profile`;
 }
 
+export function getVerifiedPlayerJoinUrl(userId) {
+  const normalizedUserId = Number(userId);
+  if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
+    return null;
+  }
+
+  const bridgeBase = getJoinBridgeBaseUrl();
+  if (!bridgeBase) {
+    return getFollowUserJoinUrl(normalizedUserId);
+  }
+
+  return `${bridgeBase}/join/verified-user/${encodeURIComponent(normalizedUserId)}`;
+}
+
 export function getGameInstanceJoinUrl(placeId, gameId) {
   const normalizedPlaceId = Number(placeId);
   const normalizedGameId = String(gameId ?? "").trim();
