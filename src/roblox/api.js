@@ -109,8 +109,8 @@ export async function searchRobloxUsers(
 
 export async function searchMarketplaceItems({
   keyword = null,
-  category = 11,
-  subcategory = 2,
+  category = 2,
+  subcategory = null,
   sortType = 2,
   sortAggregation = 5,
   limit = 30,
@@ -122,11 +122,14 @@ export async function searchMarketplaceItems({
 
   const params = new URLSearchParams({
     Category: String(category),
-    Subcategory: String(subcategory),
     SortType: String(sortType),
     SortAggregation: String(sortAggregation),
     Limit: String(requestedLimit),
   });
+
+  if (subcategory !== null && subcategory !== undefined) {
+    params.set("Subcategory", String(subcategory));
+  }
 
   if (keyword) {
     params.set("Keyword", String(keyword));

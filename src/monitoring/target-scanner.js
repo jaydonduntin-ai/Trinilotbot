@@ -222,7 +222,7 @@ let userSearchBackoffUntil = 0;
 let searchTermCursor = 0;
 let groupSearchTermCursor = 0;
 let leaderboardPageCursor = 1;
-let lastLimitedOwnerRefreshAt = 0;
+let lastLimitedOwnerRefreshAt = Date.now();
 let lastGroupRefreshAt = 0;
 let lastLeaderboardRefreshAt = 0;
 let lastMarketplaceRefreshAt = 0;
@@ -3733,8 +3733,8 @@ async function refreshMarketplaceCandidateSources() {
   let items = [];
   try {
     const result = await searchMarketplaceItems({
-      category: 11,
-      subcategory: 2,
+      category: 2,
+      subcategory: null,
       sortType: 2,
       sortAggregation: 5,
       limit: 30,
