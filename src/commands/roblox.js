@@ -197,12 +197,12 @@ function buildProfileComponents(profile, interactionId, page, totalPages) {
     new ButtonBuilder().setLabel("Roblox profile").setStyle(ButtonStyle.Link).setURL(profile.profileUrl),
     new ButtonBuilder().setLabel("Rolimon's").setStyle(ButtonStyle.Link).setURL(getRolimonsProfileUrl(profile.id)),
   ];
-  if (profile.currentGame?.followJoinUrl) {
+  if (profile.currentGame?.verifiedJoinUrl) {
     links.push(
       new ButtonBuilder()
-        .setLabel("Join player")
+        .setLabel("Verify & join server")
         .setStyle(ButtonStyle.Link)
-        .setURL(profile.currentGame.followJoinUrl),
+        .setURL(profile.currentGame.verifiedJoinUrl),
     );
   }
   if (profile.currentGame?.gameUrl) {
@@ -213,14 +213,7 @@ function buildProfileComponents(profile, interactionId, page, totalPages) {
         .setURL(profile.currentGame.gameUrl),
     );
   }
-  if (profile.currentGame?.joinUrl) {
-    links.push(
-      new ButtonBuilder()
-        .setLabel("Try exact server")
-        .setStyle(ButtonStyle.Link)
-        .setURL(profile.currentGame.joinUrl),
-    );
-  }
+
   return [new ActionRowBuilder().addComponents(links.slice(0, 5)), ...buildPaginationRow(interactionId, page, totalPages)];
 }
 
@@ -258,12 +251,11 @@ function formatCurrentServer(game) {
   const parts = [];
   if (game.placeId) parts.push(`Place ID: \`${game.placeId}\``);
   if (game.gameId) parts.push(`Job ID: \`${game.gameId}\``);
-  if (game.followJoinUrl) parts.push("[Join player](<" + game.followJoinUrl + ">)");
-  if (game.joinUrl) {
+  if (game.verifiedJoinUrl) {
     parts.push(
-      "[Try exact server](<" +
-        game.joinUrl +
-        ">) · Roblox currently has a known gameInstanceId deep-link issue",
+      "[Verify & join current server](<" +
+        game.verifiedJoinUrl +
+        ">) · public access is checked again when you tap",
     );
   }
   return parts.length > 0 ? parts.join("\n") : "Unavailable";
