@@ -50,7 +50,7 @@ export const DEFAULT_TARGET_VALUE = 150_000;
 export const DEFAULT_MM2_VALUE = 50_000;
 export const DEFAULT_MM2_RAP = 450_000;
 export const DEFAULT_TARGET_COUNT = 10;
-export const MAX_TARGETS = 10;
+export const MAX_TARGETS = 50;
 export const MIN_TARGET_THRESHOLD = 150_000;
 export const MAX_TARGET_THRESHOLD = 2_500_000;
 
@@ -774,9 +774,16 @@ async function scanDiscoveredTargetsInternal({
     }
   }
 
-  const maxPresenceCandidates = getPositiveIntegerEnv(
+  const configuredPresenceCandidates = getPositiveIntegerEnv(
     "ROBLOX_TARGET_MAX_PRESENCE_CANDIDATES",
     DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES,
+  );
+  // Large target requests need a wider live-presence window. Scale only the
+  // interactive request, while leaving the background live cache at its
+  // conservative 150-user cycle.
+  const maxPresenceCandidates = Math.min(
+    1_000,
+    Math.max(configuredPresenceCandidates, requestedLimit * 20),
   );
   const waveSize = Math.max(
     50,
@@ -843,7 +850,7 @@ async function scanDiscoveredTargetsInternal({
     "ROBLOX_TARGET_MAX_ACTIVE_TO_VERIFY",
     DEFAULT_MAX_ACTIVE_TO_VERIFY,
   );
-  const verificationBuffer = Math.min(MAX_TARGETS, requestedLimit + 2);
+  const verificationBuffer = Math.min(MAX_TARGETS + 5, requestedLimit + 5);
 
   for (
     let offset = 0;

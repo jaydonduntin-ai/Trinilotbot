@@ -72,3 +72,27 @@ test("/target, /scan, and /dev expose 150K RAP and value floors", () => {
     assert.equal(minValue.min_value, 150000);
   }
 });
+
+
+test("/target supports up to 50 results and defaults to 50", () => {
+  const command = commandModules.find(
+    (candidate) => candidate.definition.name === "target",
+  );
+  const definition = command.definition.toJSON();
+  const limit = definition.options.find((option) => option.name === "limit");
+
+  assert.ok(limit);
+  assert.equal(limit.max_value, 50);
+  assert.match(limit.description, /default 50, max 50/i);
+});
+
+test("/dev can request up to 50 developer targets", () => {
+  const command = commandModules.find(
+    (candidate) => candidate.definition.name === "dev",
+  );
+  const definition = command.definition.toJSON();
+  const limit = definition.options.find((option) => option.name === "limit");
+
+  assert.ok(limit);
+  assert.equal(limit.max_value, 50);
+});

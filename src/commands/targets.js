@@ -11,7 +11,8 @@ import {
 } from "../monitoring/target-scanner.js";
 import { addScanPlayers } from "../storage/scan-watchlist.js";
 
-const TARGET_EXPANSION_LIMIT = 25;
+const TARGET_DEFAULT_LIMIT = 50;
+const TARGET_EXPANSION_LIMIT = 50;
 
 export const targetsCommand = {
   definition: new SlashCommandBuilder()
@@ -41,7 +42,7 @@ export const targetsCommand = {
       option
         .setName("limit")
         .setDescription(
-          `Random results to return, default ${DEFAULT_TARGET_COUNT}, max ${MAX_TARGETS}.`,
+          `Results to return, default ${TARGET_DEFAULT_LIMIT}, max ${MAX_TARGETS}.`,
         )
         .setMinValue(1)
         .setMaxValue(MAX_TARGETS),
@@ -53,7 +54,7 @@ export const targetsCommand = {
     const minimumRapOption =
       interaction.options.getInteger("min_rap");
     const limit =
-      interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
+      interaction.options.getInteger("limit") ?? TARGET_DEFAULT_LIMIT;
 
     // /target now enforces both configured floors by default.
     const minimumValue = minimumValueOption ?? DEFAULT_TARGET_VALUE;
@@ -104,6 +105,7 @@ export const targetsCommand = {
         limit,
       });
       result.expansion = expansion;
+      result.requestedLimit = limit;
 
       const embeds = buildTargetEmbeds(result);
       const embedBatches = batchEmbedsForDiscord(embeds);
@@ -155,6 +157,7 @@ function buildTargetEmbeds(result) {
               : "Presence mode: fresh",
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
+        `Requested: ${result.requestedLimit ?? result.players.length} · Returned: ${result.players.length}`,
         `Join-ready: ${result.joinReadyCount ?? 0} · Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.expansion?.failed
           ? "Expansion scan: unavailable · live discovery continued"
