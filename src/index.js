@@ -75,6 +75,54 @@ client.once(Events.ClientReady, async (readyClient) => {
       console.info(
         `Discord application managers resolved: ${applicationManagerUserIds.size}.`,
       );
+
+      const integrationConfig =
+        application?.integration_types_config ?? {};
+      if (
+        Object.prototype.hasOwnProperty.call(integrationConfig, "1") &&
+        integrationConfig?.["0"]
+      ) {
+        const privateInstallResponse = await fetch(
+          "https://discord.com/api/v10/applications/@me",
+          {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bot ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              integration_types_config: {
+                "0": integrationConfig["0"],
+              },
+            }),
+          },
+        );
+
+        if (privateInstallResponse.ok) {
+          const updatedApplication =
+            await privateInstallResponse.json();
+          const updatedKeys = Object.keys(
+            updatedApplication?.integration_types_config ?? {},
+          );
+          if (!updatedKeys.includes("1")) {
+            console.info(
+              "Discord USER_INSTALL disabled; app install context is guild-only.",
+            );
+          } else {
+            console.warn(
+              "Discord accepted the USER_INSTALL restriction request but USER_INSTALL is still enabled.",
+            );
+          }
+        } else {
+          console.warn(
+            `Could not disable Discord USER_INSTALL via API: HTTP ${privateInstallResponse.status}.`,
+          );
+        }
+      } else {
+        console.info(
+          "Discord USER_INSTALL is already disabled or no guild-install configuration is available.",
+        );
+      }
     } else {
       console.warn(
         `Could not resolve Discord application managers: HTTP ${response.status}.`,
