@@ -50,3 +50,24 @@ test("/rbx2mm2 is RAP-only with a 450K minimum", () => {
   assert.equal(minRap.min_value, 450000);
   assert.match(definition.description, /450K\+ RAP/i);
 });
+
+
+test("/target and /scan expose 150K RAP and value floors", () => {
+  for (const name of ["target", "scan"]) {
+    const command = commandModules.find(
+      (candidate) => candidate.definition.name === name,
+    );
+    const definition = command.definition.toJSON();
+    const minRap = definition.options.find(
+      (option) => option.name === "min_rap",
+    );
+    const minValue = definition.options.find(
+      (option) => option.name === "min_value",
+    );
+
+    assert.ok(minRap, `/${name} should expose min_rap`);
+    assert.ok(minValue, `/${name} should expose min_value`);
+    assert.equal(minRap.min_value, 150000);
+    assert.equal(minValue.min_value, 150000);
+  }
+});

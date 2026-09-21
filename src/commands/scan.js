@@ -1,6 +1,7 @@
 import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_RAP,
+  DEFAULT_TARGET_VALUE,
   MIN_TARGET_THRESHOLD,
   MAX_TARGET_THRESHOLD,
   scanCandidatesForWatchlist,
@@ -14,7 +15,16 @@ export const scanCommand = {
   definition: new SlashCommandBuilder()
     .setName("scan")
     .setDescription(
-      "Discover 450k+ RAP players and add them to the automatic presence watchlist.",
+      "Discover threshold-qualified RAP/value players for the presence watchlist.",
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("min_value")
+        .setDescription(
+          `Value to store: ${MIN_TARGET_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEFAULT_TARGET_VALUE.toLocaleString()}.`,
+        )
+        .setMinValue(MIN_TARGET_THRESHOLD)
+        .setMaxValue(MAX_TARGET_THRESHOLD),
     )
     .addIntegerOption((option) =>
       option
@@ -38,6 +48,8 @@ export const scanCommand = {
   async execute(interaction) {
     const minimumRap =
       interaction.options.getInteger("min_rap") ?? DEFAULT_TARGET_RAP;
+    const minimumValue =
+      interaction.options.getInteger("min_value") ?? DEFAULT_TARGET_VALUE;
     const limit =
       interaction.options.getInteger("limit") ?? DEFAULT_SCAN_LIMIT;
 
@@ -46,7 +58,7 @@ export const scanCommand = {
     try {
       const result = await scanCandidatesForWatchlist({
         minimumRap,
-        minimumValue: null,
+        minimumValue,
         limit,
       });
 
@@ -60,7 +72,7 @@ export const scanCommand = {
         .setTitle("Roblox scan watchlist")
         .setDescription(
           [
-            `Threshold: ${minimumRap.toLocaleString()}+ RAP`,
+            `Threshold: ${minimumRap.toLocaleString()}+ RAP · ${minimumValue.toLocaleString()}+ value`,
             `Candidates checked: ${result.checkedCount}`,
             `Watchlist users skipped: ${result.alreadyWatchedSkipped ?? 0}`,
             `Previous /target users skipped: ${result.previousTargetSkipped ?? 0}`,

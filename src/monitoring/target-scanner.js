@@ -45,13 +45,13 @@ import {
   initializeTargetHistory,
 } from "../storage/target-history.js";
 
-export const DEFAULT_TARGET_RAP = 450_000;
+export const DEFAULT_TARGET_RAP = 150_000;
 export const DEFAULT_TARGET_VALUE = 150_000;
 export const DEFAULT_MM2_VALUE = 50_000;
 export const DEFAULT_MM2_RAP = 450_000;
 export const DEFAULT_TARGET_COUNT = 10;
 export const MAX_TARGETS = 10;
-export const MIN_TARGET_THRESHOLD = 450_000;
+export const MIN_TARGET_THRESHOLD = 150_000;
 export const MAX_TARGET_THRESHOLD = 2_500_000;
 
 const GAME_TARGETS = {
@@ -284,7 +284,7 @@ export function startTargetCandidatePoolWarmup() {
     try {
       const stats = await refreshTargetLiveCache();
       console.info(
-        `Target live cache: ${stats.liveCount} in-game · ${stats.checkedCount} checked · ${stats.verifiedIndexCount} verified 450k+ indexed.`,
+        `Target live cache: ${stats.liveCount} in-game · ${stats.checkedCount} checked · ${stats.verifiedIndexCount} verified ${getMinimumTargetRap().toLocaleString()}+ RAP indexed.`,
       );
     } catch (error) {
       console.warn("Background target live-cache refresh failed:", error);
@@ -1041,7 +1041,7 @@ async function scanDiscoveredTargetsInternal({
 
 export async function scanCandidatesForWatchlist({
   minimumRap = DEFAULT_TARGET_RAP,
-  minimumValue = null,
+  minimumValue = DEFAULT_TARGET_VALUE,
   limit = 25,
 } = {}) {
   await ensureTargetHistoryHydrated();
@@ -4873,7 +4873,7 @@ function selectCandidatesFromPool(
       continue;
     }
 
-    // Known 450k+ /scan hits are the hot pool for /target.
+    // Known threshold-qualified /scan hits are the hot pool for /target.
     // They bypass the normal cooldown so every /target run checks them first.
     if (
       candidate.sources?.has("Verified /scan RAP watchlist") &&

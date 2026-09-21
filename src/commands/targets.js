@@ -6,20 +6,24 @@ import {
   MAX_TARGETS,
   MIN_TARGET_THRESHOLD,
   MAX_TARGET_THRESHOLD,
+  scanCandidatesForWatchlist,
   scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
+import { addScanPlayers } from "../storage/scan-watchlist.js";
+
+const TARGET_EXPANSION_LIMIT = 25;
 
 export const targetsCommand = {
   definition: new SlashCommandBuilder()
     .setName("target")
     .setDescription(
-      "Discover currently in-game Roblox players above a value/RAP threshold.",
+      "Expand the candidate pool, then return currently in-game RAP/value targets.",
     )
     .addIntegerOption((option) =>
       option
         .setName("min_value")
         .setDescription(
-          `Collectible value floor: ${MIN_TARGET_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}.`,
+          `Value floor: ${MIN_TARGET_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEFAULT_TARGET_VALUE.toLocaleString()}.`,
         )
         .setMinValue(MIN_TARGET_THRESHOLD)
         .setMaxValue(MAX_TARGET_THRESHOLD),
@@ -51,21 +55,55 @@ export const targetsCommand = {
     const limit =
       interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
-    // Default /target behavior is the established 450k+ RAP live search.
-    // min_value can still be supplied explicitly for value-based searches.
-    const minimumValue = minimumValueOption ?? null;
-    const minimumRap =
-      minimumRapOption ??
-      (minimumValueOption === null ? DEFAULT_TARGET_RAP : null);
+    // /target now enforces both configured floors by default.
+    const minimumValue = minimumValueOption ?? DEFAULT_TARGET_VALUE;
+    const minimumRap = minimumRapOption ?? DEFAULT_TARGET_RAP;
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
+      let expansion = {
+        attempted: true,
+        failed: false,
+        checkedCount: 0,
+        qualifyingCount: 0,
+        newlyAdded: 0,
+        alreadyWatched: 0,
+        totalWatchlist: 0,
+      };
+
+      try {
+        const scanResult = await scanCandidatesForWatchlist({
+          minimumValue,
+          minimumRap,
+          limit: TARGET_EXPANSION_LIMIT,
+        });
+        const stored = await addScanPlayers(
+          scanResult.players,
+          interaction.channelId,
+        );
+        expansion = {
+          ...expansion,
+          checkedCount: scanResult.checkedCount,
+          qualifyingCount: scanResult.players.length,
+          newlyAdded: stored.added,
+          alreadyWatched: stored.existing,
+          totalWatchlist: stored.total,
+        };
+      } catch (error) {
+        expansion = { ...expansion, failed: true };
+        console.warn(
+          "/target expansion scan failed; continuing with live discovery:",
+          error,
+        );
+      }
+
       const result = await scanDiscoveredTargets({
         minimumValue,
         minimumRap,
         limit,
       });
+      result.expansion = expansion;
 
       const embeds = buildTargetEmbeds(result);
       const embedBatches = batchEmbedsForDiscord(embeds);
@@ -106,7 +144,7 @@ function buildTargetEmbeds(result) {
     .setTitle("Automatic Roblox discovery")
     .setDescription(
       [
-        `Verified 450k+ index: ${result.verifiedIndexCount ?? 0}`,
+        `Verified ${DEFAULT_TARGET_RAP.toLocaleString()}+ RAP index: ${result.verifiedIndexCount ?? 0}`,
         `Live cache: ${result.liveCacheSize ?? 0} · Cache hit: ${result.liveCacheHit ? "Yes" : "No"}`,
         result.usedCachedPresenceFallback
           ? "Presence mode: recent cache (Roblox rate-limited)"
@@ -117,7 +155,12 @@ function buildTargetEmbeds(result) {
               : "Presence mode: fresh",
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
-        `Join-ready: ${result.joinReadyCount ?? 0} · Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
+        `Join-ready: ${result.joinReadyCount ?? 0} · Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
+        result.expansion?.failed
+          ? "Expansion scan: unavailable · live discovery continued"
+          : result.expansion?.attempted
+            ? `Expansion scan: ${result.expansion.checkedCount} checked · ${result.expansion.qualifyingCount} qualified · ${result.expansion.newlyAdded} newly watched`
+            : null,
         result.minimumValue !== null && result.minimumValue !== undefined
           ? `Value threshold: ${result.minimumValue.toLocaleString()}`
           : null,
@@ -136,7 +179,7 @@ function buildTargetEmbeds(result) {
       inline: false,
     })
     .setFooter({
-      text: "The verified RAP index and live cache run continuously. /target final-checks Roblox presence before display.",
+      text: "/target expands first, then final-checks Roblox presence before display.",
     })
     .setTimestamp();
 
