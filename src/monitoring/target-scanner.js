@@ -113,20 +113,20 @@ const TARGET_POOL_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const LIMITED_OWNER_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const GROUP_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const MARKETPLACE_REFRESH_INTERVAL_MS = 8 * 60 * 1000;
-const DEFAULT_SEED_ITEM_COUNT = 12;
-const DEFAULT_OWNERS_PER_ITEM = 20;
+const DEFAULT_SEED_ITEM_COUNT = 4;
+const DEFAULT_OWNERS_PER_ITEM = 10;
 const DEFAULT_SEED_MIN_ITEM_RAP = 75_000;
 
 const MANUAL_LIMITED_OWNER_SEEDS = [
-  { id: 494291269, name: "SSHF" },
-  { id: 553970961, name: "Green Queen of the Night" },
   { id: 1365767, name: "Valkyrie Helm" },
   { id: 439945661, name: "SKOTN" },
   { id: 1744060292, name: "Poisoned Horns" },
+  { id: 553970961, name: "Green Queen of the Night" },
 ];
 const OWNER_CONCURRENCY = 1;
-const OWNER_DISCOVERY_BUDGET_MS = 12_000;
+const OWNER_DISCOVERY_BUDGET_MS = 18_000;
 const DEFAULT_LIMITED_OWNER_BACKOFF_MS = 10 * 60 * 1000;
+const DEFAULT_LIMITED_OWNER_INTER_ITEM_DELAY_MS = 2_500;
 const DEFAULT_MARKETPLACE_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_GROUP_DISCOVERY_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_USER_SEARCH_BACKOFF_MS = 10 * 60 * 1000;
@@ -3733,7 +3733,7 @@ async function refreshMarketplaceCandidateSources() {
   let items = [];
   try {
     const result = await searchMarketplaceItems({
-      category: 2,
+      category: 11,
       subcategory: 2,
       sortType: 2,
       sortAggregation: 5,
@@ -4561,7 +4561,16 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
     const ownerPromise = mapWithConcurrency(
       seedItems,
       OWNER_CONCURRENCY,
-      async (item) => {
+      async (item, index) => {
+        if (index > 0) {
+          await sleep(
+            getPositiveIntegerEnv(
+              "ROBLOX_LIMITED_OWNER_INTER_ITEM_DELAY_MS",
+              DEFAULT_LIMITED_OWNER_INTER_ITEM_DELAY_MS,
+            ),
+          );
+        }
+
         if (
           stopLimitedOwnerSweep ||
           Date.now() < limitedOwnerBackoffUntil

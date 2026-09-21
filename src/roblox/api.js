@@ -109,7 +109,7 @@ export async function searchRobloxUsers(
 
 export async function searchMarketplaceItems({
   keyword = null,
-  category = 2,
+  category = 11,
   subcategory = 2,
   sortType = 2,
   sortAggregation = 5,
@@ -286,11 +286,13 @@ export async function searchRobloxGroups(
   const payload = await fetchRobloxJson(
     `${GROUPS_API_URL}/v1/groups/search?keyword=${encodeURIComponent(
       normalizedKeyword,
-    )}&limit=${requestedLimit}${cursorQuery}`,
+    )}&prioritizeExactMatch=true&sortOrder=Asc&limit=${requestedLimit}${cursorQuery}`,
   );
 
   return {
-    groups: Array.isArray(payload?.data) ? payload.data : [],
+    groups: (Array.isArray(payload?.data) ? payload.data : [])
+      .map((entry) => entry?.group ?? entry)
+      .filter(Boolean),
     nextPageCursor: payload?.nextPageCursor ?? null,
   };
 }
