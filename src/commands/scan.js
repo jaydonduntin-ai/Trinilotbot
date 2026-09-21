@@ -8,7 +8,7 @@ import {
 } from "../monitoring/target-scanner.js";
 import { addScanPlayers } from "../storage/scan-watchlist.js";
 
-const DEFAULT_SCAN_LIMIT = 25;
+const DEFAULT_SCAN_LIMIT = 50;
 const MAX_SCAN_LIMIT = 50;
 
 export const scanCommand = {

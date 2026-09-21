@@ -1422,11 +1422,11 @@ async function scanDeveloperTargetsInternal({
 export async function scanCandidatesForWatchlist({
   minimumRap = DEFAULT_TARGET_RAP,
   minimumValue = DEFAULT_TARGET_VALUE,
-  limit = 25,
+  limit = 50,
 } = {}) {
   await ensureTargetHistoryHydrated();
 
-  const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 25));
+  const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 50));
   // /scan is for expanding the verified pool. Exclude persisted watchlist
   // members, users already surfaced by /target in this runtime, users already
   // returned by a prior /scan, and candidates already attempted at this exact
