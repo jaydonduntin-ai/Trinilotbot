@@ -39,7 +39,7 @@ test("/ping keeps its existing response", async () => {
 });
 
 
-test("/rbx2mm2 is RAP-only with a 450K minimum", () => {
+test("/rbx2mm2 is RAP-only with a 150K minimum and 50-result output cap", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "rbx2mm2",
   );
@@ -48,8 +48,14 @@ test("/rbx2mm2 is RAP-only with a 450K minimum", () => {
     (option) => option.name === "min_rap",
   );
 
-  assert.equal(minRap.min_value, 450000);
-  assert.match(definition.description, /450K\+ RAP/i);
+  const limit = definition.options.find(
+    (option) => option.name === "limit",
+  );
+
+  assert.equal(minRap.min_value, 150000);
+  assert.match(definition.description, /150K\+ RAP/i);
+  assert.equal(limit.max_value, 50);
+  assert.match(limit.description, /default 50, max 50/i);
 });
 
 
@@ -86,7 +92,7 @@ test("/target supports up to 50 results and defaults to 50", () => {
   assert.match(limit.description, /default 50, max 50/i);
 });
 
-test("/dev can request up to 50 developer targets", () => {
+test("/dev defaults to and allows up to 50 developer targets", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "dev",
   );
@@ -95,6 +101,7 @@ test("/dev can request up to 50 developer targets", () => {
 
   assert.ok(limit);
   assert.equal(limit.max_value, 50);
+  assert.match(limit.description, /default 50, max 50/i);
 });
 
 

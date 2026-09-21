@@ -1,19 +1,18 @@
 import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_MM2_RAP,
-  DEFAULT_TARGET_COUNT,
   MAX_TARGETS,
   MAX_TARGET_THRESHOLD,
   scanMm2RapActivity,
 } from "../monitoring/target-scanner.js";
 
-const MIN_MM2_RAP = 450_000;
+const MIN_MM2_RAP = 150_000;
 
 export const rbx2mm2Command = {
   definition: new SlashCommandBuilder()
     .setName("rbx2mm2")
     .setDescription(
-      "Find 450K+ RAP Roblox users currently playing Murder Mystery 2.",
+      "Find public-joinable 150K+ RAP Roblox users currently playing Murder Mystery 2.",
     )
     .addIntegerOption((option) =>
       option
@@ -28,7 +27,7 @@ export const rbx2mm2Command = {
       option
         .setName("limit")
         .setDescription(
-          `Results to return, default ${DEFAULT_TARGET_COUNT}, max ${MAX_TARGETS}.`,
+          `Results to return, default ${MAX_TARGETS}, max ${MAX_TARGETS}.`,
         )
         .setMinValue(1)
         .setMaxValue(MAX_TARGETS),
@@ -38,7 +37,7 @@ export const rbx2mm2Command = {
     const minimumRap =
       interaction.options.getInteger("min_rap") ?? DEFAULT_MM2_RAP;
     const limit =
-      interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
+      interaction.options.getInteger("limit") ?? MAX_TARGETS;
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await interaction.editReply(
@@ -91,7 +90,7 @@ function buildEmbeds(result) {
         `RAP checks attempted: ${result.verificationAttempts ?? 0}`,
         `Below RAP: ${result.belowRapCount ?? 0}`,
         `RAP unavailable: ${result.rapUnavailableCount ?? 0}`,
-        `Verified results: ${result.verifiedCount ?? 0}`,
+        `Verified public-joinable results: ${result.verifiedCount ?? 0}`,
         `Mode: ${result.liveCacheHit ? "MM2 live cache" : result.presenceFallbackUsed ? "public presence fallback" : result.presenceRateLimited ? "rate-limited" : "fresh Roblox presence"}`,
         `Roblox RAP threshold: ${Number(result.minimumRap ?? DEFAULT_MM2_RAP).toLocaleString()}+`,
         `Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
@@ -111,8 +110,8 @@ function buildEmbeds(result) {
         ? `${player.rapValue.toLocaleString()} RAP`
         : "Unavailable";
     const join =
-      player.followJoinUrl
-        ? `[Direct join MM2 player](<${player.followJoinUrl}>)`
+      player.verifiedJoinUrl
+        ? `[Verify & join MM2 server](<${player.verifiedJoinUrl}>)`
         : "Join unavailable";
 
     const embed = new EmbedBuilder()

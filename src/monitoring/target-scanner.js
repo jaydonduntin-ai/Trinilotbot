@@ -54,7 +54,7 @@ import {
 export const DEFAULT_TARGET_RAP = 150_000;
 export const DEFAULT_TARGET_VALUE = 150_000;
 export const DEFAULT_MM2_VALUE = 50_000;
-export const DEFAULT_MM2_RAP = 450_000;
+export const DEFAULT_MM2_RAP = 150_000;
 export const DEFAULT_TARGET_COUNT = 10;
 export const MAX_TARGETS = 50;
 export const MIN_TARGET_THRESHOLD = 150_000;
@@ -715,6 +715,10 @@ async function scanDiscoveredTargetsInternal({
     MAX_TARGETS,
     Math.max(1, Number(limit) || DEFAULT_TARGET_COUNT),
   );
+  const scanTimeBudgetMs =
+    Number.isFinite(Number(timeBudgetMs)) && Number(timeBudgetMs) > 0
+      ? Number(timeBudgetMs)
+      : DEFAULT_GAME_SCAN_TIME_BUDGET_MS;
 
   const cacheStartedAt = Date.now();
   const cachedPresences = getFreshLiveCachePresences({
@@ -1058,7 +1062,7 @@ async function scanDiscoveredTargetsInternal({
 export async function scanDeveloperTargets({
   minimumRap = DEFAULT_TARGET_RAP,
   minimumValue = DEFAULT_TARGET_VALUE,
-  limit = DEFAULT_TARGET_COUNT,
+  limit = MAX_TARGETS,
 } = {}) {
   activeInteractivePresenceScans += 1;
   try {
@@ -1087,10 +1091,13 @@ async function scanDeveloperTargetsInternal({
     Math.min(MAX_TARGETS, Number(limit) || DEFAULT_TARGET_COUNT),
   );
   const discoveryLimit = Math.max(
-    100,
+    250,
     Math.min(
-      500,
-      getPositiveIntegerEnv("ROBLOX_DEV_DISCOVERY_CANDIDATES", 250),
+      getPositiveIntegerEnv(
+        "ROBLOX_TARGET_POOL_MAX_SIZE",
+        DEFAULT_POOL_MAX_SIZE,
+      ),
+      getPositiveIntegerEnv("ROBLOX_DEV_DISCOVERY_CANDIDATES", 1_500),
     ),
   );
 
@@ -1141,7 +1148,7 @@ async function scanDeveloperTargetsInternal({
         )
         .map((presence) => Number(presence.universeId)),
     ),
-  ].slice(0, 80);
+  ].slice(0, 120);
 
   const games = await mapWithConcurrency(
     universeIds,
@@ -1330,12 +1337,16 @@ async function scanDeveloperTargetsInternal({
           { minimumValue, minimumRap },
         ),
     )
-    .slice(0, 40);
+    .slice(0, Math.max(200, requestedLimit * 4));
 
+  const verificationGoal = Math.min(
+    inGameCreators.length,
+    Math.max(requestedLimit * 3, requestedLimit + 20),
+  );
   const verified = [];
   for (
     let index = 0;
-    index < inGameCreators.length && verified.length < requestedLimit;
+    index < inGameCreators.length && verified.length < verificationGoal;
     index += VERIFY_CONCURRENCY
   ) {
     const batch = inGameCreators.slice(index, index + VERIFY_CONCURRENCY);
@@ -1365,20 +1376,26 @@ async function scanDeveloperTargetsInternal({
         developerEvidence:
           evidenceByUser.get(Number(player.id)) ?? [],
       });
-      if (verified.length >= requestedLimit) break;
+      if (verified.length >= verificationGoal) break;
     }
   }
+
+  const finalJoinability = await revalidateCurrentlyInGame(verified);
+  const publicPlayers = finalJoinability.players.slice(0, requestedLimit);
 
   return {
     minimumRap,
     minimumValue,
-    players: verified.slice(0, requestedLimit),
+    players: publicPlayers,
     observedGames: universeIds.length,
     developerCandidates: developerIds.length,
     presenceChecked:
       observedPresence.checkedIds.length +
       creatorPresence.checkedIds.length,
     inGameDeveloperCandidates: inGameCreators.length,
+    nonPublicServerCount: finalJoinability.nonPublicServerCount ?? 0,
+    finalPresenceLeftGameCount: finalJoinability.leftGameCount ?? 0,
+    finalPresenceUnavailableCount: finalJoinability.unavailableCount ?? 0,
     presenceRateLimited:
       observedPresence.rateLimited === true ||
       creatorPresence.rateLimited === true,
@@ -1824,34 +1841,21 @@ async function revalidatePlayersForGame(players, game) {
     return [];
   }
 
-  // Every player entering this helper was already observed in the requested
-  // game during the current pass. If Roblox is actively rate-limiting, keep
-  // that recent observation rather than turning valid activity into zero.
-  if (Date.now() < presenceApiBackoffUntil) {
-    return players.map((player) => ({
-      ...player,
-      presenceStatus: "In game",
-      presenceFreshness: "recent",
-    }));
-  }
-
   const userIds = players
     .map((player) => Number(player?.id))
     .filter((userId) => Number.isInteger(userId) && userId > 0);
+
+  const route = getInteractivePresenceRoute();
+  if (!route) return [];
 
   const liveCheck = await getPresenceBatched(userIds, {
     maxAttempts: 1,
     interBatchDelayMs: 500,
     stopOnRateLimit: true,
+    presenceFetcher: route.presenceFetcher,
+    fallbackFetcher: route.fallbackFetcher,
+    fallbackOnRateLimit: route.fallbackOnRateLimit,
   });
-
-  if (liveCheck.rateLimited) {
-    return players.map((player) => ({
-      ...player,
-      presenceStatus: "In game",
-      presenceFreshness: "recent",
-    }));
-  }
 
   const activeByUserId = new Map(
     liveCheck.presences
@@ -1859,7 +1863,7 @@ async function revalidatePlayersForGame(players, game) {
       .map((presence) => [Number(presence.userId), presence]),
   );
 
-  return players
+  const refreshed = players
     .filter((player) => activeByUserId.has(Number(player.id)))
     .map((player) => {
       const presence = activeByUserId.get(Number(player.id));
@@ -1867,18 +1871,18 @@ async function revalidatePlayersForGame(players, game) {
         ...player,
         presenceStatus: "In game",
         gameName: presence?.lastLocation || player.gameName,
-        placeId: presence?.placeId ?? player.placeId ?? null,
-        gameId: presence?.gameId ?? player.gameId ?? null,
-        followJoinUrl:
-          player.followJoinUrl ?? getFollowUserJoinUrl(player.id),
+        ...buildTargetJoinability(presence, player.id),
         presenceFreshness: "fresh",
       };
     });
+
+  const publicJoinability = await filterPublicJoinablePlayers(refreshed);
+  return publicJoinability.players;
 }
 
 export async function scanMm2RapActivity({
   minimumRap = DEFAULT_MM2_RAP,
-  limit = DEFAULT_TARGET_COUNT,
+  limit = MAX_TARGETS,
 } = {}) {
   return scanGameTargets({
     gameKey: "mm2",
@@ -1886,6 +1890,17 @@ export async function scanMm2RapActivity({
     minimumRap,
     limit,
     includeGameValue: false,
+    maxCandidatesOverride: getPositiveIntegerEnv(
+      "ROBLOX_MM2_SCAN_MAX_CANDIDATES",
+      getPositiveIntegerEnv(
+        "ROBLOX_TARGET_POOL_MAX_SIZE",
+        DEFAULT_POOL_MAX_SIZE,
+      ),
+    ),
+    timeBudgetMs: getPositiveIntegerEnv(
+      "ROBLOX_MM2_SCAN_TIME_BUDGET_MS",
+      120_000,
+    ),
   });
 }
 
@@ -2753,6 +2768,8 @@ export async function scanGameTargets({
   minimumRap = getMinimumTargetRap(),
   limit = DEFAULT_TARGET_COUNT,
   includeGameValue = true,
+  maxCandidatesOverride = null,
+  timeBudgetMs = null,
 } = {}) {
   const game = GAME_TARGETS[gameKey];
   if (!game) {
@@ -2794,23 +2811,25 @@ export async function scanGameTargets({
 
       const cachedVerified = cachedResults
         .filter((player) => player?.qualifies)
-        .slice(0, requestedLimit);
+        .slice(0, Math.min(MAX_TARGETS + 10, requestedLimit + 10));
+      const cachedJoinable = await revalidatePlayersForGame(
+        cachedVerified,
+        game,
+      );
 
-      if (
-        cachedVerified.length >= requestedLimit ||
-        (Date.now() < presenceApiBackoffUntil &&
-          cachedVerified.length > 0)
-      ) {
+      if (cachedJoinable.length >= requestedLimit) {
         return {
           gameKey,
           gameLabel: game.label,
           universeId: game.universeId,
           minimumValue,
           minimumRap,
-          players: cachedVerified.map(({ qualifies, ...player }) => ({
-            ...player,
-            presenceFreshness: "recent",
-          })),
+          players: cachedJoinable
+            .slice(0, requestedLimit)
+            .map(({ qualifies, ...player }) => ({
+              ...player,
+              presenceFreshness: "fresh",
+            })),
           candidateCount: cachedPresences.length,
           candidatePoolSize: candidatePool.size,
           candidateSourceCounts: getPoolSourceCounts(),
@@ -2829,7 +2848,7 @@ export async function scanGameTargets({
           belowRapCount: cachedResults.filter(
             (player) => player?.reason === "below-rap",
           ).length,
-          verifiedCount: cachedVerified.length,
+          verifiedCount: cachedJoinable.length,
           presenceRateLimited: Date.now() < presenceApiBackoffUntil,
           presenceFallbackUsed: false,
           liveCacheHit: true,
@@ -2847,10 +2866,14 @@ export async function scanGameTargets({
       minimumRap,
       minimumValue,
       respectCooldown: false,
-      maxCandidatesOverride: getPositiveIntegerEnv(
-        "ROBLOX_GAME_TARGET_MAX_CANDIDATES",
-        DEFAULT_GAME_SCAN_CANDIDATES,
-      ),
+      maxCandidatesOverride:
+        Number.isInteger(Number(maxCandidatesOverride)) &&
+        Number(maxCandidatesOverride) > 0
+          ? Number(maxCandidatesOverride)
+          : getPositiveIntegerEnv(
+              "ROBLOX_GAME_TARGET_MAX_CANDIDATES",
+              DEFAULT_GAME_SCAN_CANDIDATES,
+            ),
     });
 
     const startedAt = Date.now();
@@ -2868,7 +2891,7 @@ export async function scanGameTargets({
 
     while (
       offset < discovery.userIds.length &&
-      Date.now() - startedAt < DEFAULT_GAME_SCAN_TIME_BUDGET_MS &&
+      Date.now() - startedAt < scanTimeBudgetMs &&
       verifiedPlayers.length < requestedLimit
     ) {
       const wave = discovery.userIds.slice(
@@ -2923,7 +2946,7 @@ export async function scanGameTargets({
         index += VERIFY_CONCURRENCY
       ) {
         if (
-          Date.now() - startedAt >= DEFAULT_GAME_SCAN_TIME_BUDGET_MS ||
+          Date.now() - startedAt >= scanTimeBudgetMs ||
           verifiedPlayers.length >= requestedLimit
         ) {
           break;
@@ -2971,7 +2994,7 @@ export async function scanGameTargets({
       } else if (
         presenceScan.rateLimited &&
         !route.usingFallback &&
-        Date.now() - startedAt < DEFAULT_GAME_SCAN_TIME_BUDGET_MS
+        Date.now() - startedAt < scanTimeBudgetMs
       ) {
         // Roblox just entered shared backoff. Retry the same slice through
         // the public fallback route instead of skipping unobserved users.

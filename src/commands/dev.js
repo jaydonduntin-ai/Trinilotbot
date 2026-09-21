@@ -36,7 +36,7 @@ export const devCommand = {
       option
         .setName("limit")
         .setDescription(
-          `Developer targets to return, default 5, max ${MAX_TARGETS}.`,
+          `Developer targets to return, default ${MAX_TARGETS}, max ${MAX_TARGETS}.`,
         )
         .setMinValue(1)
         .setMaxValue(MAX_TARGETS),
@@ -47,7 +47,7 @@ export const devCommand = {
       interaction.options.getInteger("min_value") ?? DEFAULT_TARGET_VALUE;
     const minimumRap =
       interaction.options.getInteger("min_rap") ?? DEFAULT_TARGET_RAP;
-    const limit = interaction.options.getInteger("limit") ?? 5;
+    const limit = interaction.options.getInteger("limit") ?? MAX_TARGETS;
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -67,7 +67,8 @@ export const devCommand = {
             `Creator accounts resolved: ${result.developerCandidates ?? 0}`,
             `Developer presence checks: ${result.presenceChecked ?? 0}`,
             `In-game developer candidates: ${result.inGameDeveloperCandidates ?? 0}`,
-            `Verified targets: ${result.players.length}`,
+            `Verified public-joinable targets: ${result.players.length}`,
+            `Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
             `RAP floor: ${minimumRap.toLocaleString()} · Value floor: ${minimumValue.toLocaleString()}`,
             result.presenceFallbackUsed
               ? "Presence mode: public fallback used"
@@ -119,8 +120,8 @@ function buildDeveloperEmbed(player) {
     })
     .join("\n") || "Public creator evidence unavailable";
 
-  const join = player.followJoinUrl
-    ? `[Join player](<${player.followJoinUrl}>)`
+  const join = player.verifiedJoinUrl
+    ? `[Verify & join current server](<${player.verifiedJoinUrl}>)`
     : "Unavailable";
 
   const embed = new EmbedBuilder()
