@@ -127,6 +127,9 @@ const MANUAL_LIMITED_OWNER_SEEDS = [
 const OWNER_CONCURRENCY = 1;
 const OWNER_DISCOVERY_BUDGET_MS = 12_000;
 const DEFAULT_LIMITED_OWNER_BACKOFF_MS = 10 * 60 * 1000;
+const DEFAULT_MARKETPLACE_BACKOFF_MS = 10 * 60 * 1000;
+const DEFAULT_GROUP_DISCOVERY_BACKOFF_MS = 10 * 60 * 1000;
+const DEFAULT_USER_SEARCH_BACKOFF_MS = 10 * 60 * 1000;
 const SEARCH_TERMS_PER_REFRESH = 12;
 const SOCIAL_SEEDS_PER_REFRESH = 10;
 const SEARCH_CONCURRENCY = 4;
@@ -212,7 +215,10 @@ let lastLiveCacheRefreshAt = 0;
 let liveCacheBackoffUntil = 0;
 let presenceApiBackoffUntil = 0;
 let fallbackPresenceBackoffUntil = 0;
-let discoveryApiBackoffUntil = 0;
+let limitedOwnerBackoffUntil = 0;
+let marketplaceBackoffUntil = 0;
+let groupBackoffUntil = 0;
+let userSearchBackoffUntil = 0;
 let searchTermCursor = 0;
 let groupSearchTermCursor = 0;
 let leaderboardPageCursor = 1;
@@ -224,6 +230,8 @@ let lastJailbreakTradeRefreshAt = 0;
 let lastPs99PublicRefreshAt = 0;
 let lastSearchRefreshAt = 0;
 let limitedSeedCursor = 0;
+const limitedOwnerUnavailableAssetIds = new Set();
+let jailbreakDisabledLogged = false;
 let candidateRefreshPromise = null;
 let lastCandidatePoolRefreshAt = 0;
 let mm2PresenceCursor = 0;
@@ -419,8 +427,13 @@ export function startTargetCandidatePoolWarmup() {
   const refreshCandidates = async () => {
     try {
       const stats = await refreshCandidatePool();
+      const populations = stats.sourceCounts ?? {};
+      const yieldStats = stats.refreshYield ?? {};
       console.info(
-        `Target index refresh: ${candidatePool.size}/${getPositiveIntegerEnv("ROBLOX_TARGET_POOL_MAX_SIZE", DEFAULT_POOL_MAX_SIZE)} pooled · ${stats.watchlist ?? 0} watchlist · ${stats.leaderboard ?? 0} leaderboard · ${stats.ps99Public ?? 0} PS99 · ${stats.tradeAds ?? 0} trade-ads · ${stats.limitedOwners ?? 0} limited-owners · ${stats.marketplaceOwners ?? 0} marketplace-owners · ${stats.marketplaceCreators ?? 0} marketplace-creators · ${stats.marketplaceGroupMembers ?? 0} marketplace-group-members · ${stats.userSearch ?? 0} Roblox-search · ${stats.rolimonsSearch ?? 0} Rolimon-search · ${stats.groupSearchMembers ?? 0} group-search · ${stats.groupGraphMembers ?? 0} group-graph · ${stats.jailbreakTrades ?? 0} jailbreak.`,
+        `Target source populations: ${candidatePool.size}/${getPositiveIntegerEnv("ROBLOX_TARGET_POOL_MAX_SIZE", DEFAULT_POOL_MAX_SIZE)} pooled · ${populations.watchlist ?? 0} watchlist · ${populations.leaderboard ?? 0} leaderboard · ${populations.ps99Public ?? 0} PS99 · ${populations.tradeAds ?? 0} trade-ads · ${populations.limitedOwners ?? 0} limited-owners · ${populations.marketplaceOwners ?? 0} marketplace-owners · ${populations.marketplaceCreators ?? 0} marketplace-creators · ${populations.marketplaceGroupMembers ?? 0} marketplace-group-members · ${populations.userSearch ?? 0} Roblox-search · ${populations.rolimonsSearch ?? 0} Rolimon-search · ${populations.groupSearchMembers ?? 0} group-search · ${populations.groupGraphMembers ?? 0} group-graph.`,
+      );
+      console.info(
+        `Target refresh yield: ${yieldStats.tradeAds ?? 0} trade-ads · ${yieldStats.limitedOwners ?? 0} limited-owners · ${yieldStats.marketplaceOwners ?? 0} marketplace-owners · ${yieldStats.marketplaceCreators ?? 0} marketplace-creators · ${yieldStats.marketplaceGroupMembers ?? 0} marketplace-group-members · ${yieldStats.userSearch ?? 0} Roblox-search · ${yieldStats.rolimonsSearch ?? 0} Rolimon-search · ${yieldStats.groupSearchMembers ?? 0} group-search · ${yieldStats.groupGraphMembers ?? 0} group-graph · ${yieldStats.jailbreakTrades ?? 0} jailbreak.`,
       );
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
@@ -3317,7 +3330,9 @@ async function discoverCandidateUserIds({
       "Rolimon's value leaderboard",
       "Rolimon's recent trade ads",
       "Pet Simulator 99 official public API",
-      "Jailbreak Trading Network public trade listings",
+      ...(process.env.JBTN_PUBLIC_FEED_URL?.trim()
+        ? ["Jailbreak Trading Network public trade listings"]
+        : []),
     ],
   };
 }
@@ -3385,19 +3400,32 @@ async function syncWatchlistCandidates(now = Date.now()) {
 async function refreshSearchCandidateSources() {
   const terms = nextSearchTerms(SEARCH_TERMS_PER_REFRESH);
 
-  const robloxResults = await mapWithConcurrency(
-    terms,
-    SEARCH_CONCURRENCY,
-    async (term) => {
+  const robloxResults = [];
+  if (Date.now() >= userSearchBackoffUntil) {
+    for (const term of terms) {
       try {
         const result = await searchRobloxUsers(term, { limit: 25 });
-        return result.users ?? [];
+        robloxResults.push(result.users ?? []);
+        await sleep(300);
       } catch (error) {
+        if (Number(error?.status) === 429) {
+          userSearchBackoffUntil = Math.max(
+            userSearchBackoffUntil,
+            Date.now() +
+              getPositiveIntegerEnv(
+                "ROBLOX_USER_SEARCH_BACKOFF_MS",
+                DEFAULT_USER_SEARCH_BACKOFF_MS,
+              ),
+          );
+          console.warn(
+            `Roblox user search rate-limited at "${term}"; stopping this search sweep.`,
+          );
+          break;
+        }
         console.warn(`Roblox user search failed for "${term}":`, error);
-        return [];
       }
-    },
-  );
+    }
+  }
 
   const robloxUserIds = [
     ...new Set(
@@ -3475,7 +3503,7 @@ async function refreshGeneralCandidatePool() {
   // is verified against Roblox's public asset-owner endpoint.
   let limitedOwnerUserIds = [];
   if (
-    now >= discoveryApiBackoffUntil &&
+    now >= limitedOwnerBackoffUntil &&
     now - lastLimitedOwnerRefreshAt >= LIMITED_OWNER_REFRESH_INTERVAL_MS
   ) {
     limitedOwnerUserIds = await refreshLimitedOwnerCandidates(
@@ -3521,17 +3549,20 @@ async function refreshGeneralCandidatePool() {
     groupWallPosters: 0,
     allyGroupMembers: 0,
     enemyGroupMembers: 0,
-    ps99Public: 0,
   };
   if (
-    now >= discoveryApiBackoffUntil &&
+    now >= groupBackoffUntil &&
     now - lastGroupRefreshAt >= GROUP_REFRESH_INTERVAL_MS
   ) {
     groupStats = await refreshGroupCandidateSources().catch((error) => {
       if (Number(error?.status) === 429) {
-        discoveryApiBackoffUntil = Math.max(
-          discoveryApiBackoffUntil,
-          Date.now() + DEFAULT_PRESENCE_API_BACKOFF_MS,
+        groupBackoffUntil = Math.max(
+          groupBackoffUntil,
+          Date.now() +
+            getPositiveIntegerEnv(
+              "ROBLOX_GROUP_DISCOVERY_BACKOFF_MS",
+              DEFAULT_GROUP_DISCOVERY_BACKOFF_MS,
+            ),
         );
       }
       console.warn("Roblox group discovery failed:", error);
@@ -3548,15 +3579,19 @@ async function refreshGeneralCandidatePool() {
     marketplaceGroupMembers: 0,
   };
   if (
-    now >= discoveryApiBackoffUntil &&
+    now >= marketplaceBackoffUntil &&
     now - lastMarketplaceRefreshAt >= MARKETPLACE_REFRESH_INTERVAL_MS
   ) {
     marketplaceStats = await refreshMarketplaceCandidateSources().catch(
       (error) => {
         if (Number(error?.status) === 429) {
-          discoveryApiBackoffUntil = Math.max(
-            discoveryApiBackoffUntil,
-            Date.now() + DEFAULT_PRESENCE_API_BACKOFF_MS,
+          marketplaceBackoffUntil = Math.max(
+            marketplaceBackoffUntil,
+            Date.now() +
+              getPositiveIntegerEnv(
+                "ROBLOX_MARKETPLACE_BACKOFF_MS",
+                DEFAULT_MARKETPLACE_BACKOFF_MS,
+              ),
           );
         }
         console.warn("Roblox Marketplace discovery failed:", error);
@@ -3567,7 +3602,14 @@ async function refreshGeneralCandidatePool() {
   }
 
   let jailbreakTradeUserIds = [];
-  if (now - lastJailbreakTradeRefreshAt >= JAILBREAK_TRADE_REFRESH_INTERVAL_MS) {
+  const jailbreakFeedConfigured = Boolean(
+    process.env.JBTN_PUBLIC_FEED_URL?.trim(),
+  );
+  if (
+    jailbreakFeedConfigured &&
+    now - lastJailbreakTradeRefreshAt >=
+      JAILBREAK_TRADE_REFRESH_INTERVAL_MS
+  ) {
     jailbreakTradeUserIds = await refreshJailbreakTradeCandidates().catch(
       (error) => {
         console.warn("Jailbreak Trading Network discovery failed:", error);
@@ -3575,6 +3617,11 @@ async function refreshGeneralCandidatePool() {
       },
     );
     lastJailbreakTradeRefreshAt = now;
+  } else if (!jailbreakFeedConfigured && !jailbreakDisabledLogged) {
+    jailbreakDisabledLogged = true;
+    console.info(
+      "Jailbreak Trading Network discovery disabled: no verified JBTN_PUBLIC_FEED_URL is configured.",
+    );
   }
 
   const ps99PublicUserIds = await refreshPs99PublicCandidates(now);
@@ -3582,18 +3629,23 @@ async function refreshGeneralCandidatePool() {
   pruneCandidatePool();
   await persistCandidateDatabaseSnapshot();
 
+  const sourceCounts = getPoolSourceCounts();
   return {
-    ...getPoolSourceCounts(),
-    watchlist: watchlistUserIds.length,
-    tradeAds: tradeAdUserIds.length,
-    limitedOwners: limitedOwnerUserIds.length,
-    leaderboard: leaderboardUserIds.length,
-    jailbreakTrades: jailbreakTradeUserIds.length,
-    ps99Public: ps99PublicUserIds.length,
-    ...searchStats,
-    ...groupStats,
-    ...marketplaceStats,
+    ...sourceCounts,
+    sourceCounts,
+    refreshYield: {
+      watchlist: watchlistUserIds.length,
+      tradeAds: tradeAdUserIds.length,
+      limitedOwners: limitedOwnerUserIds.length,
+      leaderboard: leaderboardUserIds.length,
+      jailbreakTrades: jailbreakTradeUserIds.length,
+      ps99Public: ps99PublicUserIds.length,
+      ...searchStats,
+      ...groupStats,
+      ...marketplaceStats,
+    },
   };
+}
 }
 
 async function refreshPs99PublicCandidates(now = Date.now()) {
@@ -3658,6 +3710,27 @@ async function refreshJailbreakTradeCandidates() {
 }
 
 async function refreshMarketplaceCandidateSources() {
+  if (Date.now() < marketplaceBackoffUntil) {
+    return {
+      marketplaceCreators: 0,
+      marketplaceOwners: 0,
+      marketplaceGroupMembers: 0,
+    };
+  }
+
+  const noteMarketplaceError = (error) => {
+    if (Number(error?.status) === 429) {
+      marketplaceBackoffUntil = Math.max(
+        marketplaceBackoffUntil,
+        Date.now() +
+          getPositiveIntegerEnv(
+            "ROBLOX_MARKETPLACE_BACKOFF_MS",
+            DEFAULT_MARKETPLACE_BACKOFF_MS,
+          ),
+      );
+    }
+  };
+
   const queryPlans = [
     { sortType: 2, sortAggregation: 5 },
     { sortType: 1, sortAggregation: 5 },
@@ -3676,6 +3749,7 @@ async function refreshMarketplaceCandidateSources() {
         });
         return result.items;
       } catch (error) {
+        noteMarketplaceError(error);
         console.warn("Roblox Marketplace discovery failed:", error);
         return [];
       }
@@ -3730,6 +3804,7 @@ async function refreshMarketplaceCandidateSources() {
         });
         return result.owners;
       } catch (error) {
+        noteMarketplaceError(error);
         console.warn(
           `Roblox Marketplace owner discovery failed for asset ${assetId}:`,
           error,
@@ -3776,6 +3851,7 @@ async function refreshMarketplaceCandidateSources() {
         });
         return result.users;
       } catch (error) {
+        noteMarketplaceError(error);
         console.warn(
           `Roblox Marketplace creator-group discovery failed for group ${groupId}:`,
           error,
@@ -3808,6 +3884,32 @@ async function refreshMarketplaceCandidateSources() {
 }
 
 async function refreshGroupCandidateSources() {
+  if (Date.now() < groupBackoffUntil) {
+    return {
+      groupSearchMembers: 0,
+      groupGraphMembers: 0,
+      friendGroupMembers: 0,
+      primaryGroupMembers: 0,
+      groupOwners: 0,
+      groupWallPosters: 0,
+      allyGroupMembers: 0,
+      enemyGroupMembers: 0,
+    };
+  }
+
+  const noteGroupError = (error) => {
+    if (Number(error?.status) === 429) {
+      groupBackoffUntil = Math.max(
+        groupBackoffUntil,
+        Date.now() +
+          getPositiveIntegerEnv(
+            "ROBLOX_GROUP_DISCOVERY_BACKOFF_MS",
+            DEFAULT_GROUP_DISCOVERY_BACKOFF_MS,
+          ),
+      );
+    }
+  };
+
   const terms = nextGroupSearchTerms(GROUP_SEARCH_TERMS_PER_REFRESH);
 
   const groupSearchResults = await mapWithConcurrency(
@@ -3818,6 +3920,7 @@ async function refreshGroupCandidateSources() {
         const result = await searchRobloxGroups(term, { limit: 10 });
         return result.groups.slice(0, GROUPS_PER_SEARCH_TERM);
       } catch (error) {
+        noteGroupError(error);
         console.warn(`Roblox group search failed for "${term}":`, error);
         return [];
       }
@@ -3843,6 +3946,7 @@ async function refreshGroupCandidateSources() {
         });
         return result.users;
       } catch (error) {
+        noteGroupError(error);
         console.warn(
           `Roblox group-member discovery failed for group ${groupId}:`,
           error,
@@ -3908,6 +4012,7 @@ async function refreshGroupCandidateSources() {
         });
         return result.users;
       } catch (error) {
+        noteGroupError(error);
         console.warn(
           `Roblox group-graph member discovery failed for group ${groupId}:`,
           error,
@@ -3973,6 +4078,7 @@ async function refreshGroupCandidateSources() {
         });
         return result.users;
       } catch (error) {
+        noteGroupError(error);
         console.warn(
           `Roblox friend-group member discovery failed for group ${groupId}:`,
           error,
@@ -4037,6 +4143,7 @@ async function refreshGroupCandidateSources() {
         });
         return result.users;
       } catch (error) {
+        noteGroupError(error);
         console.warn(
           `Roblox primary-group member discovery failed for group ${groupId}:`,
           error,
@@ -4082,6 +4189,7 @@ async function refreshGroupCandidateSources() {
       try {
         return await getRobloxGroupDetails(groupId);
       } catch (error) {
+        noteGroupError(error);
         console.warn(
           `Roblox group-owner discovery failed for group ${groupId}:`,
           error,
@@ -4125,6 +4233,7 @@ async function refreshGroupCandidateSources() {
         });
         return result.users;
       } catch (error) {
+        noteGroupError(error);
         console.warn(
           `Roblox group-wall discovery failed for group ${groupId}:`,
           error,
@@ -4423,7 +4532,10 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
         ...MANUAL_LIMITED_OWNER_SEEDS,
         ...tradeAdSeeds,
         ...rotatingSeeds,
-      ],
+      ].filter(
+        (item) =>
+          !limitedOwnerUnavailableAssetIds.has(Number(item?.id)),
+      ),
       seedItemCount,
     );
 
@@ -4434,7 +4546,7 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
       async (item) => {
         if (
           stopLimitedOwnerSweep ||
-          Date.now() < discoveryApiBackoffUntil
+          Date.now() < limitedOwnerBackoffUntil
         ) {
           return [];
         }
@@ -4445,10 +4557,17 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
           });
           return result.owners;
         } catch (error) {
+          if (Number(error?.status) === 403) {
+            limitedOwnerUnavailableAssetIds.add(Number(item.id));
+            console.warn(
+              `Limited-owner asset ${item.id} returned HTTP 403; quarantining it for this runtime.`,
+            );
+            return [];
+          }
           if (Number(error?.status) === 429) {
             stopLimitedOwnerSweep = true;
-            discoveryApiBackoffUntil = Math.max(
-              discoveryApiBackoffUntil,
+            limitedOwnerBackoffUntil = Math.max(
+              limitedOwnerBackoffUntil,
               Date.now() +
                 getPositiveIntegerEnv(
                   "ROBLOX_LIMITED_OWNER_BACKOFF_MS",
