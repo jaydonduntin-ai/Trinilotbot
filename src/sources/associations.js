@@ -1,20 +1,58 @@
 const SOURCE_TIMEOUT_MS = 8_000;
 const BLOXLINK_BASE_URL = "https://api.blox.link/v4";
 
+function createProviderDiagnostics() {
+  return [];
+}
+
+function recordProvider(diag, provider, status, detail = null) {
+  diag.push({ provider, status, detail });
+}
+
 export async function lookupRobloxToDiscord({ userId, username, guildId = null }) {
   const results = [];
+  const diagnostics = createProviderDiagnostics();
 
   const bloxlink = await lookupBloxlinkRobloxToDiscord({
     userId,
     guildId,
+  }).then((result) => {
+    recordProvider(
+      diagnostics,
+      "Bloxlink",
+      result ? "matched" : "no-match",
+    );
+    return result;
   }).catch((error) => {
     console.warn("Bloxlink Roblox-to-Discord lookup failed:", error);
+    recordProvider(
+      diagnostics,
+      "Bloxlink",
+      "error",
+      Number(error?.status) || error?.message || null,
+    );
     return null;
   });
   if (bloxlink) results.push(bloxlink);
 
-  const rover = await lookupRoverRobloxToDiscord({ userId }).catch((error) => {
+  const roverConfigured = Boolean(
+    process.env.ROVER_ROBLOX_TO_DISCORD_URL?.trim(),
+  );
+  const rover = await lookupRoverRobloxToDiscord({ userId }).then((result) => {
+    recordProvider(
+      diagnostics,
+      "RoVer",
+      result ? "matched" : roverConfigured ? "no-match" : "not-configured",
+    );
+    return result;
+  }).catch((error) => {
     console.warn("RoVer Roblox-to-Discord lookup failed:", error);
+    recordProvider(
+      diagnostics,
+      "RoVer",
+      "error",
+      Number(error?.status) || error?.message || null,
+    );
     return null;
   });
   if (rover) results.push(rover);
@@ -32,33 +70,91 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
     const normalized = response
       ? normalizeRobloxToDiscord(response, { userId, username })
       : null;
+    recordProvider(
+      diagnostics,
+      getAssociationSourceName(),
+      normalized ? "matched" : response ? "no-match" : "error",
+    );
     if (normalized) results.push(normalized);
+  } else {
+    recordProvider(
+      diagnostics,
+      getAssociationSourceName(),
+      "not-configured",
+    );
   }
 
-  return reconcileAssociations(results, "discord");
+  const reconciled = reconcileAssociations(results, "discord");
+  return {
+    association: reconciled,
+    diagnostics,
+  };
 }
 
 export async function lookupDiscordToRoblox({ query, guildId = null }) {
   const results = [];
+  const diagnostics = createProviderDiagnostics();
   const discordId = /^\d+$/.test(query) ? query : null;
 
   if (discordId) {
     const bloxlink = await lookupBloxlinkDiscordToRoblox({
       discordId,
       guildId,
+    }).then((result) => {
+      recordProvider(
+        diagnostics,
+        "Bloxlink",
+        result ? "matched" : "no-match",
+      );
+      return result;
     }).catch((error) => {
       console.warn("Bloxlink Discord-to-Roblox lookup failed:", error);
+      recordProvider(
+        diagnostics,
+        "Bloxlink",
+        "error",
+        Number(error?.status) || error?.message || null,
+      );
       return null;
     });
     if (bloxlink) results.push(bloxlink);
 
-    const rover = await lookupRoverDiscordToRoblox({ discordId }).catch(
-      (error) => {
-        console.warn("RoVer Discord-to-Roblox lookup failed:", error);
-        return null;
-      },
+    const roverConfigured = Boolean(
+      process.env.ROVER_DISCORD_TO_ROBLOX_URL?.trim(),
     );
+    const rover = await lookupRoverDiscordToRoblox({ discordId }).then(
+      (result) => {
+        recordProvider(
+          diagnostics,
+          "RoVer",
+          result ? "matched" : roverConfigured ? "no-match" : "not-configured",
+        );
+        return result;
+      },
+    ).catch((error) => {
+      console.warn("RoVer Discord-to-Roblox lookup failed:", error);
+      recordProvider(
+        diagnostics,
+        "RoVer",
+        "error",
+        Number(error?.status) || error?.message || null,
+      );
+      return null;
+    });
     if (rover) results.push(rover);
+  } else {
+    recordProvider(
+      diagnostics,
+      "Bloxlink",
+      "skipped",
+      "Discord ID required for provider lookup",
+    );
+    recordProvider(
+      diagnostics,
+      "RoVer",
+      "skipped",
+      "Discord ID required for provider lookup",
+    );
   }
 
   const template = process.env.DISCORD_TO_ROBLOX_SOURCE_URL;
@@ -75,10 +171,25 @@ export async function lookupDiscordToRoblox({ query, guildId = null }) {
     const normalized = response
       ? normalizeDiscordToRoblox(response, query)
       : null;
+    recordProvider(
+      diagnostics,
+      getAssociationSourceName(),
+      normalized ? "matched" : response ? "no-match" : "error",
+    );
     if (normalized) results.push(normalized);
+  } else {
+    recordProvider(
+      diagnostics,
+      getAssociationSourceName(),
+      "not-configured",
+    );
   }
 
-  return reconcileAssociations(results, "roblox");
+  const reconciled = reconcileAssociations(results, "roblox");
+  return {
+    association: reconciled,
+    diagnostics,
+  };
 }
 
 async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
