@@ -1,6 +1,6 @@
 FROM node:22-alpine
 WORKDIR /app
-COPY package.json ./
+COPY package.json render.yaml .env.example Dockerfile ./
 RUN npm install --omit=dev --no-audit --no-fund
 COPY src ./src
 COPY scripts ./scripts
