@@ -47,6 +47,62 @@ let activeHeavyCommands = 0;
 let allowedGuildIds = new Set();
 let applicationManagerUserIds = new Set();
 
+const WATCHDOG_INTERVAL_MS = 10_000;
+let lastWatchdogTickAt = Date.now();
+let watchdogLagStrikes = 0;
+
+function startLocalWatchdog() {
+  const timer = setInterval(() => {
+    const now = Date.now();
+    const lagMs = Math.max(0, now - lastWatchdogTickAt - WATCHDOG_INTERVAL_MS);
+    lastWatchdogTickAt = now;
+
+    const ready = client.isReady();
+    const memory = process.memoryUsage();
+    const heapUsedMb = Math.round(memory.heapUsed / 1024 / 1024);
+    const rssMb = Math.round(memory.rss / 1024 / 1024);
+
+    if (lagMs > 5_000) {
+      watchdogLagStrikes += 1;
+      console.warn(
+        `Watchdog: event-loop lag ${lagMs}ms · strike ${watchdogLagStrikes}.`,
+      );
+    } else {
+      watchdogLagStrikes = 0;
+    }
+
+    if (!ready) {
+      console.warn("Watchdog: Discord client is not ready.");
+    }
+
+    if (watchdogLagStrikes >= 3) {
+      console.error(
+        "Watchdog: repeated event-loop stalls detected; exiting for Railway restart.",
+      );
+      process.exitCode = 1;
+      setTimeout(() => process.exit(1), 250).unref?.();
+      return;
+    }
+
+    if (rssMb > 768) {
+      console.error(
+        `Watchdog: RSS ${rssMb}MB exceeded safety ceiling; exiting for Railway restart.`,
+      );
+      process.exitCode = 1;
+      setTimeout(() => process.exit(1), 250).unref?.();
+      return;
+    }
+
+    if (now % 60_000 < WATCHDOG_INTERVAL_MS) {
+      console.info(
+        `Watchdog healthy · discord=${ready ? "ready" : "not-ready"} · heap=${heapUsedMb}MB · rss=${rssMb}MB · heavy=${activeHeavyCommands}.`,
+      );
+    }
+  }, WATCHDOG_INTERVAL_MS);
+
+  timer.unref?.();
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.info(`Discord connected as ${readyClient.user.tag}`);
 
@@ -287,6 +343,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     );
   }
 
+  startLocalWatchdog();
   console.info("Trinilotbot startup sequence finished.");
 });
 
