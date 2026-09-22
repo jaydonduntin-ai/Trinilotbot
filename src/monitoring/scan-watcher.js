@@ -6,8 +6,8 @@ import {
   updateScanPresences,
 } from "../storage/scan-watchlist.js";
 
-const DEFAULT_SCAN_WATCH_INTERVAL_MS = 2 * 60 * 1000;
-const DEFAULT_SCAN_WATCH_USERS_PER_CYCLE = 50;
+const DEFAULT_SCAN_WATCH_INTERVAL_MS = 60 * 1000;
+const DEFAULT_SCAN_WATCH_USERS_PER_CYCLE = 200;
 const PRESENCE_BATCH_SIZE = 50;
 let scanWatcherRunning = false;
 let scanWatcherCursor = 0;
@@ -31,7 +31,7 @@ export async function startScanWatcher(client) {
     }
   };
 
-  const initialTimer = setTimeout(run, 75_000);
+  const initialTimer = setTimeout(run, 20_000);
   initialTimer.unref?.();
   const interval = setInterval(run, intervalMs);
   interval.unref?.();
