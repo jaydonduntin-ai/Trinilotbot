@@ -13,6 +13,12 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
   });
   if (bloxlink) results.push(bloxlink);
 
+  const rover = await lookupRoverRobloxToDiscord({ userId }).catch((error) => {
+    console.warn("RoVer Roblox-to-Discord lookup failed:", error);
+    return null;
+  });
+  if (rover) results.push(rover);
+
   const template = process.env.ROBLOX_TO_DISCORD_SOURCE_URL;
   if (template) {
     const response = await fetchAssociationSource(template, {
@@ -45,6 +51,14 @@ export async function lookupDiscordToRoblox({ query, guildId = null }) {
       return null;
     });
     if (bloxlink) results.push(bloxlink);
+
+    const rover = await lookupRoverDiscordToRoblox({ discordId }).catch(
+      (error) => {
+        console.warn("RoVer Discord-to-Roblox lookup failed:", error);
+        return null;
+      },
+    );
+    if (rover) results.push(rover);
   }
 
   const template = process.env.DISCORD_TO_ROBLOX_SOURCE_URL;
@@ -71,45 +85,182 @@ async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
   const apiKey = process.env.BLOXLINK_API_KEY?.trim();
   if (!apiKey) return null;
 
-  const useGuild = Boolean(guildId && process.env.BLOXLINK_USE_GUILD_LOOKUPS === "true");
-  const url = useGuild
-    ? `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/roblox-to-discord/${encodeURIComponent(userId)}`
-    : `${BLOXLINK_BASE_URL}/public/roblox-to-discord/${encodeURIComponent(userId)}`;
+  const useGuild = Boolean(
+    guildId && process.env.BLOXLINK_USE_GUILD_LOOKUPS === "true",
+  );
+  const urls = [];
 
-  const payload = await fetchJson(url, {
-    Authorization: apiKey,
-  });
+  if (useGuild) {
+    urls.push(
+      `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/roblox-to-discord/${encodeURIComponent(userId)}`,
+      `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/roblox/${encodeURIComponent(userId)}`,
+    );
+  }
 
-  const ids = Array.isArray(payload?.discordIDs)
-    ? payload.discordIDs.map(String).filter(Boolean)
-    : payload?.discordID
-      ? [String(payload.discordID)]
-      : [];
+  urls.push(
+    `${BLOXLINK_BASE_URL}/public/roblox-to-discord/${encodeURIComponent(userId)}`,
+    `${BLOXLINK_BASE_URL}/public/roblox/${encodeURIComponent(userId)}`,
+  );
 
-  if (ids.length === 0) return null;
+  for (const url of [...new Set(urls)]) {
+    try {
+      const payload = await fetchJson(url, { Authorization: apiKey });
+      const ids = [
+        ...new Set(
+          [
+            ...(Array.isArray(payload?.discordIDs)
+              ? payload.discordIDs
+              : []),
+            payload?.discordID,
+            payload?.discordId,
+            payload?.discord?.id,
+            ...(Array.isArray(payload?.discord)
+              ? payload.discord.map((entry) => entry?.id ?? entry)
+              : []),
+          ]
+            .filter(Boolean)
+            .map(String),
+        ),
+      ];
+      if (ids.length === 0) continue;
 
-  return {
-    verified: true,
-    source: "Bloxlink",
-    discordId: ids[0],
-    discordIds: ids,
-    discordUsername: null,
-    discordGlobalName: null,
-    evidenceUrl: null,
-  };
+      return {
+        verified: true,
+        source: "Bloxlink",
+        discordId: ids[0],
+        discordIds: ids,
+        discordUsername: toOptionalString(
+          payload?.discordUsername ??
+            payload?.discord?.username ??
+            payload?.discord?.name,
+        ),
+        discordGlobalName: toOptionalString(
+          payload?.discordGlobalName ?? payload?.discord?.globalName,
+        ),
+        evidenceUrl: null,
+      };
+    } catch (error) {
+      const status = Number(error?.status);
+      if (status === 401 || status === 403) throw error;
+      if (status !== 404) {
+        console.warn(
+          `Bloxlink Roblox-to-Discord endpoint failed (${url}):`,
+          error,
+        );
+      }
+    }
+  }
+
+  return null;
 }
 
 async function lookupBloxlinkDiscordToRoblox({ discordId, guildId }) {
   const apiKey = process.env.BLOXLINK_API_KEY?.trim();
   if (!apiKey) return null;
 
-  const useGuild = Boolean(guildId && process.env.BLOXLINK_USE_GUILD_LOOKUPS === "true");
-  const url = useGuild
-    ? `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/discord-to-roblox/${encodeURIComponent(discordId)}`
-    : `${BLOXLINK_BASE_URL}/public/discord-to-roblox/${encodeURIComponent(discordId)}`;
+  const useGuild = Boolean(
+    guildId && process.env.BLOXLINK_USE_GUILD_LOOKUPS === "true",
+  );
+  const urls = [];
 
-  const payload = await fetchJson(url, {
-    Authorization: apiKey,
+  if (useGuild) {
+    urls.push(
+      `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/discord-to-roblox/${encodeURIComponent(discordId)}`,
+      `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/discord/${encodeURIComponent(discordId)}`,
+    );
+  }
+
+  urls.push(
+    `${BLOXLINK_BASE_URL}/public/discord-to-roblox/${encodeURIComponent(discordId)}`,
+    `${BLOXLINK_BASE_URL}/public/discord/${encodeURIComponent(discordId)}`,
+  );
+
+  for (const url of [...new Set(urls)]) {
+    try {
+      const payload = await fetchJson(url, { Authorization: apiKey });
+      const robloxId = toOptionalString(
+        payload?.robloxID ??
+          payload?.robloxId ??
+          payload?.roblox?.id ??
+          payload?.primaryAccount?.id,
+      );
+      const robloxUsername = toOptionalString(
+        payload?.robloxUsername ??
+          payload?.username ??
+          payload?.roblox?.username ??
+          payload?.roblox?.name ??
+          payload?.primaryAccount?.username,
+      );
+
+      if (!robloxId && !robloxUsername) continue;
+
+      return {
+        verified: true,
+        source: "Bloxlink",
+        robloxId,
+        robloxUsername,
+        evidenceUrl: null,
+      };
+    } catch (error) {
+      const status = Number(error?.status);
+      if (status === 401 || status === 403) throw error;
+      if (status !== 404) {
+        console.warn(
+          `Bloxlink Discord-to-Roblox endpoint failed (${url}):`,
+          error,
+        );
+      }
+    }
+  }
+
+  return null;
+}
+
+async function lookupRoverRobloxToDiscord({ userId }) {
+  const template = process.env.ROVER_ROBLOX_TO_DISCORD_URL?.trim();
+  if (!template) return null;
+
+  const payload = await fetchAssociationSource(template, {
+    robloxId: userId,
+  });
+
+  const ids = [
+    ...new Set(
+      [
+        ...(Array.isArray(payload?.discordIDs) ? payload.discordIDs : []),
+        payload?.discordID,
+        payload?.discordId,
+        payload?.discord?.id,
+      ]
+        .filter(Boolean)
+        .map(String),
+    ),
+  ];
+  if (ids.length === 0) return null;
+
+  return {
+    verified: true,
+    source: "RoVer",
+    discordId: ids[0],
+    discordIds: ids,
+    discordUsername: toOptionalString(
+      payload?.discordUsername ??
+        payload?.discord?.username ??
+        payload?.discord?.name,
+    ),
+    discordGlobalName: toOptionalString(
+      payload?.discordGlobalName ?? payload?.discord?.globalName,
+    ),
+    evidenceUrl: toOptionalString(payload?.evidenceUrl),
+  };
+}
+
+async function lookupRoverDiscordToRoblox({ discordId }) {
+  const template = process.env.ROVER_DISCORD_TO_ROBLOX_URL?.trim();
+  if (!template) return null;
+
+  const payload = await fetchAssociationSource(template, {
+    discordId,
   });
 
   const robloxId = toOptionalString(
@@ -126,10 +277,10 @@ async function lookupBloxlinkDiscordToRoblox({ discordId, guildId }) {
 
   return {
     verified: true,
-    source: "Bloxlink",
+    source: "RoVer",
     robloxId,
     robloxUsername,
-    evidenceUrl: null,
+    evidenceUrl: toOptionalString(payload?.evidenceUrl),
   };
 }
 
@@ -152,7 +303,11 @@ async function fetchJson(url, extraHeaders = {}) {
   });
 
   if (!response.ok) {
-    throw new Error(`Association source returned HTTP ${response.status}.`);
+    const error = new Error(
+      `Association source returned HTTP ${response.status}.`,
+    );
+    error.status = response.status;
+    throw error;
   }
 
   const contentType = response.headers.get("content-type") ?? "";
