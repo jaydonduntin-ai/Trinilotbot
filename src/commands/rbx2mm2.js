@@ -12,7 +12,7 @@ export const rbx2mm2Command = {
   definition: new SlashCommandBuilder()
     .setName("rbx2mm2")
     .setDescription(
-      "Find public-joinable 150K+ RAP Roblox users currently playing Murder Mystery 2.",
+      "Find up to 50 public-joinable 150K+ RAP users currently playing Murder Mystery 2.",
     )
     .addIntegerOption((option) =>
       option
