@@ -7,7 +7,6 @@ import { rbx2mm2Command } from "./rbx2mm2.js";
 import { robloxCommand } from "./roblox.js";
 import { devCommand } from "./dev.js";
 import { targetsCommand } from "./targets.js";
-import { scanCommand } from "./scan.js";
 
 export const commandModules = [
   pingCommand,
@@ -19,5 +18,4 @@ export const commandModules = [
   alertsCommand,
   devCommand,
   targetsCommand,
-  scanCommand,
 ];
