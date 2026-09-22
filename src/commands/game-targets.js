@@ -103,7 +103,7 @@ function createGameTargetCommand({
               })
             : gameKey === "adopt-me"
               ? await scanAdoptMeRapActivity({
-                  minimumRap: minimumRap ?? DEFAULT_TARGET_RAP,
+                  minimumRap: minimumRap ?? 100_000,
                   limit,
                 })
               : await scanGameTargets({
