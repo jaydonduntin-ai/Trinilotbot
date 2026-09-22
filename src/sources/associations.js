@@ -197,17 +197,17 @@ async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
   );
   const urls = [];
 
+  urls.push(
+    `${BLOXLINK_BASE_URL}/public/roblox-to-discord/${encodeURIComponent(userId)}`,
+    `${BLOXLINK_BASE_URL}/public/roblox/${encodeURIComponent(userId)}`,
+  );
+
   if (useGuild) {
     urls.push(
       `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/roblox-to-discord/${encodeURIComponent(userId)}`,
       `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/roblox/${encodeURIComponent(userId)}`,
     );
   }
-
-  urls.push(
-    `${BLOXLINK_BASE_URL}/public/roblox-to-discord/${encodeURIComponent(userId)}`,
-    `${BLOXLINK_BASE_URL}/public/roblox/${encodeURIComponent(userId)}`,
-  );
 
   for (const url of [...new Set(urls)]) {
     try {
@@ -270,17 +270,17 @@ async function lookupBloxlinkDiscordToRoblox({ discordId, guildId }) {
   );
   const urls = [];
 
+  urls.push(
+    `${BLOXLINK_BASE_URL}/public/discord-to-roblox/${encodeURIComponent(discordId)}`,
+    `${BLOXLINK_BASE_URL}/public/discord/${encodeURIComponent(discordId)}`,
+  );
+
   if (useGuild) {
     urls.push(
       `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/discord-to-roblox/${encodeURIComponent(discordId)}`,
       `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/discord/${encodeURIComponent(discordId)}`,
     );
   }
-
-  urls.push(
-    `${BLOXLINK_BASE_URL}/public/discord-to-roblox/${encodeURIComponent(discordId)}`,
-    `${BLOXLINK_BASE_URL}/public/discord/${encodeURIComponent(discordId)}`,
-  );
 
   for (const url of [...new Set(urls)]) {
     try {
@@ -526,6 +526,64 @@ function toOptionalString(value) {
 
   const normalized = String(value).trim();
   return normalized || null;
+}
+
+export async function testAssociationProviders() {
+  const results = [];
+
+  // Documented RoVer public registry behavior: a made-up Discord ID should
+  // return a clean no-match response rather than crash the provider layer.
+  try {
+    const rover = await lookupRoverDiscordToRoblox({
+      discordId: "1",
+    });
+    results.push({
+      provider: "RoVer",
+      direction: "discord-to-roblox",
+      ok: rover === null || rover?.verified === true,
+      outcome: rover ? "matched" : "no-match",
+    });
+  } catch (error) {
+    results.push({
+      provider: "RoVer",
+      direction: "discord-to-roblox",
+      ok: false,
+      outcome: "error",
+      detail: Number(error?.status) || error?.message || null,
+    });
+  }
+
+  if (process.env.BLOXLINK_API_KEY?.trim()) {
+    try {
+      const blox = await lookupBloxlinkDiscordToRoblox({
+        discordId: "1",
+        guildId: null,
+      });
+      results.push({
+        provider: "Bloxlink",
+        direction: "discord-to-roblox",
+        ok: true,
+        outcome: blox ? "matched" : "no-match",
+      });
+    } catch (error) {
+      results.push({
+        provider: "Bloxlink",
+        direction: "discord-to-roblox",
+        ok: false,
+        outcome: "error",
+        detail: Number(error?.status) || error?.message || null,
+      });
+    }
+  } else {
+    results.push({
+      provider: "Bloxlink",
+      direction: "discord-to-roblox",
+      ok: false,
+      outcome: "not-configured",
+    });
+  }
+
+  return results;
 }
 
 function getAssociationSourceName() {
