@@ -58,9 +58,9 @@ function createGameTargetCommand({
           option
             .setName("min_rap")
             .setDescription(
-              `Minimum Roblox RAP, default ${DEFAULT_TARGET_RAP.toLocaleString()}.`,
+              `Minimum Roblox RAP, default 100,000.`,
             )
-            .setMinValue(1)
+            .setMinValue(100_000)
             .setMaxValue(2_000_000_000),
         );
       }
