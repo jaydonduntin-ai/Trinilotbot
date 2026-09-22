@@ -44,7 +44,11 @@ import { scanGameValue } from "../providers/game-value-providers.js";
 import { getRblxValueProfile } from "../providers/rblxvalue.js";
 import { getScanWatchlist } from "../storage/scan-watchlist.js";
 import {
+  appendColdCandidates,
+  compactColdCandidateDatabase,
+  getColdCandidateDatabaseStats,
   loadCandidateDatabase,
+  sampleColdCandidateDatabase,
   saveCandidateDatabase,
 } from "../storage/candidate-database.js";
 import { addMm2ValuePlayers } from "../storage/mm2-value-watchlist.js";
@@ -112,6 +116,9 @@ const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 90_000;
 const DEFAULT_GAME_SCAN_WAVE_SIZE = 300;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 50_000;
+const DEFAULT_HOT_POOL_MAX_SIZE = 100_000;
+const DEFAULT_COLD_POOL_MAX_SIZE = 1_000_000;
+const DEFAULT_COLD_SAMPLE_SIZE = 5_000;
 const DEFAULT_POOL_TTL_MS = 48 * 60 * 60 * 1000;
 const DEFAULT_RECENT_CHECK_COOLDOWN_MS = 15 * 60 * 1000;
 const TARGET_POOL_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
@@ -228,6 +235,8 @@ let candidateDatabaseWritePromise = Promise.resolve();
 let targetPoolWarmupTimer = null;
 let targetLiveCacheTimer = null;
 let liveTargetCursor = 0;
+let coldCandidateCursor = 0;
+let lastColdCompactionAt = 0;
 let lastLiveCacheRefreshAt = 0;
 let liveCacheBackoffUntil = 0;
 let presenceApiBackoffUntil = 0;
@@ -3758,6 +3767,51 @@ async function discoverCandidateUserIds({
     void refreshCandidatePool();
   }
 
+  const coldSample = await sampleColdCandidateDatabase({
+    limit: getPositiveIntegerEnv(
+      "ROBLOX_CANDIDATE_COLD_SAMPLE_SIZE",
+      DEFAULT_COLD_SAMPLE_SIZE,
+    ),
+    offset: coldCandidateCursor,
+  }).catch(() => ({ candidates: [], nextOffset: 0, eof: true }));
+
+  if (coldSample.candidates.length > 0) {
+    const nowForCold = Date.now();
+    for (const raw of coldSample.candidates) {
+      const userId = Number(raw?.userId);
+      if (!Number.isInteger(userId) || userId <= 0) continue;
+      const existing = candidatePool.get(userId) ?? {
+        userId,
+        firstSeenAt: Number(raw?.firstSeenAt) || nowForCold,
+        lastSeenAt: Number(raw?.lastSeenAt) || nowForCold,
+        lastCheckedAt: 0,
+        lastSocialExpandedAt: 0,
+        lastFollowExpandedAt: 0,
+        lastGroupExpandedAt: 0,
+        lastFriendGroupExpandedAt: 0,
+        lastPrimaryGroupExpandedAt: 0,
+        lastKnownRap: null,
+        lastKnownRapAt: 0,
+        lastKnownRapSource: null,
+        lastKnownValue: null,
+        lastKnownValueAt: 0,
+        lastKnownValueSource: null,
+        sources: new Set(),
+      };
+      if (Number.isFinite(Number(raw?.lastKnownRap))) {
+        existing.lastKnownRap = Number(raw.lastKnownRap);
+        existing.lastKnownRapAt = Number(raw?.lastKnownRapAt) || 0;
+      }
+      if (Number.isFinite(Number(raw?.lastKnownValue))) {
+        existing.lastKnownValue = Number(raw.lastKnownValue);
+        existing.lastKnownValueAt = Number(raw?.lastKnownValueAt) || 0;
+      }
+      for (const source of raw?.sources ?? []) existing.sources.add(source);
+      candidatePool.set(userId, existing);
+    }
+    coldCandidateCursor = coldSample.eof ? 0 : coldSample.nextOffset;
+  }
+
   const candidateSourceCounts = getPoolSourceCounts();
   const now = Date.now();
   const selection = selectCandidatesFromPool(maxCandidates, now, {
@@ -6599,13 +6653,34 @@ function pruneCandidatePool(now = Date.now()) {
     },
   );
 
-  for (
-    const candidate of rankedForRemoval.slice(
-      0,
-      candidatePool.size - maxSize,
-    )
-  ) {
+  const hotMaxSize = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_HOT_POOL_MAX_SIZE",
+    Math.max(maxSize, DEFAULT_HOT_POOL_MAX_SIZE),
+  );
+  if (candidatePool.size <= hotMaxSize) return;
+
+  const candidatesToRemove = rankedForRemoval.slice(
+    0,
+    candidatePool.size - hotMaxSize,
+  );
+  for (const candidate of candidatesToRemove) {
     candidatePool.delete(candidate.userId);
+  }
+  void appendColdCandidates(candidatesToRemove.map(serializeCandidate)).catch(
+    (error) => console.warn("Cold candidate spill failed:", error),
+  );
+
+  const nowForCompaction = Date.now();
+  if (nowForCompaction - lastColdCompactionAt >= 60 * 60 * 1000) {
+    lastColdCompactionAt = nowForCompaction;
+    void compactColdCandidateDatabase({
+      maxEntries: getPositiveIntegerEnv(
+        "ROBLOX_CANDIDATE_COLD_MAX_SIZE",
+        DEFAULT_COLD_POOL_MAX_SIZE,
+      ),
+    }).catch((error) =>
+      console.warn("Cold candidate compaction failed:", error),
+    );
   }
 }
 
