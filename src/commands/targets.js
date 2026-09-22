@@ -139,7 +139,7 @@ function buildTargetEmbeds(result) {
     .setTitle("Automatic Roblox discovery")
     .setDescription(
       [
-        `Verified ${DEFAULT_TARGET_RAP.toLocaleString()}+ RAP index: ${result.verifiedIndexCount ?? 0}`,
+        `Verified ${Number(result.minimumRap ?? DEFAULT_TARGET_RAP).toLocaleString()}+ RAP index: ${result.verifiedIndexCount ?? 0}`,
         `Live cache: ${result.liveCacheSize ?? 0} · Cache hit: ${result.liveCacheHit ? "Yes" : "No"}`,
         result.usedCachedPresenceFallback
           ? "Presence mode: recent cache (Roblox rate-limited)"
