@@ -5,6 +5,7 @@ import {
   DEFAULT_TARGET_VALUE,
   DEFAULT_TARGET_RAP,
   MAX_TARGETS,
+  scanAdoptMeRapActivity,
   scanGameTargets,
   scanMm2ValueTargets,
 } from "../monitoring/target-scanner.js";
@@ -68,7 +69,7 @@ function createGameTargetCommand({
         option
           .setName("limit")
           .setDescription(
-            `Random results to return, default ${DEFAULT_TARGET_COUNT}, max ${MAX_TARGETS}.`,
+            `Results to return, default ${gameKey === "adopt-me" ? MAX_TARGETS : DEFAULT_TARGET_COUNT}, max ${MAX_TARGETS}.`,
           )
           .setMinValue(1)
           .setMaxValue(MAX_TARGETS),
@@ -87,7 +88,8 @@ function createGameTargetCommand({
         ? interaction.options.getInteger("min_mm2_value")
         : null;
       const limit =
-        interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
+        interaction.options.getInteger("limit") ??
+        (gameKey === "adopt-me" ? MAX_TARGETS : DEFAULT_TARGET_COUNT);
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -99,15 +101,20 @@ function createGameTargetCommand({
                 minimumRap,
                 limit,
               })
-            : await scanGameTargets({
-                gameKey,
-                minimumValue: supportsGameValue ? minimumValue : null,
-                minimumRap:
-                  supportsGameValue
-                    ? minimumRap
-                    : (minimumRap ?? undefined),
-                limit,
-              });
+            : gameKey === "adopt-me"
+              ? await scanAdoptMeRapActivity({
+                  minimumRap: minimumRap ?? DEFAULT_TARGET_RAP,
+                  limit,
+                })
+              : await scanGameTargets({
+                  gameKey,
+                  minimumValue: supportsGameValue ? minimumValue : null,
+                  minimumRap:
+                    supportsGameValue
+                      ? minimumRap
+                      : (minimumRap ?? undefined),
+                  limit,
+                });
 
         await interaction.editReply({
           content:
@@ -222,11 +229,13 @@ function buildGameTargetEmbeds(result) {
           value: player.gameName ?? result.gameLabel,
           inline: true,
         },
-        {
-          name: `${result.gameLabel} inventory scanner`,
-          value: gameInventory,
-          inline: false,
-        },
+        ...(result.gameKey === "mm2"
+          ? [{
+              name: `${result.gameLabel} inventory scanner`,
+              value: gameInventory,
+              inline: false,
+            }]
+          : []),
       );
 
     if (player.avatarUrl) {
