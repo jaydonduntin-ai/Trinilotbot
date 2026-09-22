@@ -39,7 +39,7 @@ test("/ping keeps its existing response", async () => {
 });
 
 
-test("/rbx2mm2 is RAP-only with a 100K minimum and 50-result output cap", () => {
+test("/rbx2mm2 is RAP-only with a 2K minimum and 50-result output cap", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "rbx2mm2",
   );
@@ -52,8 +52,8 @@ test("/rbx2mm2 is RAP-only with a 100K minimum and 50-result output cap", () => 
     (option) => option.name === "limit",
   );
 
-  assert.equal(minRap.min_value, 100000);
-  assert.match(definition.description, /100K\+ RAP/i);
+  assert.equal(minRap.min_value, 2000);
+  assert.match(definition.description, /2K\+ RAP/i);
   assert.equal(limit.max_value, 50);
   assert.match(limit.description, /default 50, max 50/i);
 });
@@ -147,14 +147,14 @@ test("Discord commands are intended for guild-only use", async () => {
   assert.equal(isGuildAllowed(null, allowed), false);
 });
 
-test("/rbx2adm uses a 100K RAP minimum and defaults to 50 results", async () => {
+test("/rbx2adm uses a 2K RAP minimum and defaults to 50 results", async () => {
   const { rbx2admCommand } = await import("../src/commands/game-targets.js");
   const definition = rbx2admCommand.definition.toJSON();
   const minRap = definition.options.find((option) => option.name === "min_rap");
   const limit = definition.options.find((option) => option.name === "limit");
 
-  assert.equal(minRap.min_value, 100000);
-  assert.match(minRap.description, /100,000/);
+  assert.equal(minRap.min_value, 2000);
+  assert.match(minRap.description, /2,000/);
   assert.equal(limit.max_value, 50);
   assert.match(limit.description, /default 50, max 50/i);
 });
