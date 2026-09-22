@@ -339,11 +339,19 @@ export async function getRobloxGroupUsers(
     ? `&cursor=${encodeURIComponent(cursor)}`
     : "";
 
-  const payload = await fetchRobloxJson(
-    `${GROUPS_API_URL}/v1/groups/${encodeURIComponent(
-      normalizedId,
-    )}/users?sortOrder=Asc&limit=${requestedLimit}${cursorQuery}`,
-  );
+  let payload;
+  try {
+    payload = await fetchRobloxJson(
+      `${GROUPS_API_URL}/v1/groups/${encodeURIComponent(
+        normalizedId,
+      )}/users?sortOrder=Asc&limit=${requestedLimit}${cursorQuery}`,
+    );
+  } catch (error) {
+    if ([400, 404].includes(Number(error?.status))) {
+      return { users: [], nextPageCursor: null };
+    }
+    throw error;
+  }
 
   const users = (payload?.data ?? [])
     .map((entry) => {
@@ -804,43 +812,59 @@ export async function getAssetResellers(assetId, { limit = 10 } = {}) {
   }
 
   if (collectibleItemId) {
-    const payload = await fetchRobloxJson(
-      `${MARKETPLACE_SALES_API_URL}/v1/item/${encodeURIComponent(
-        collectibleItemId,
-      )}/resellers?limit=${requestedLimit}`,
-    );
+    try {
+      const payload = await fetchRobloxJson(
+        `${MARKETPLACE_SALES_API_URL}/v1/item/${encodeURIComponent(
+          collectibleItemId,
+        )}/resellers?limit=${requestedLimit}`,
+      );
 
-    const resellers = (payload?.data ?? [])
-      .map((entry) => {
-        const sellerId = Number(
-          entry?.seller?.sellerId ??
-          entry?.seller?.id ??
-          entry?.sellerId,
-        );
-        return {
-          userId:
-            Number.isInteger(sellerId) && sellerId > 0
-              ? sellerId
+      const resellers = (payload?.data ?? [])
+        .map((entry) => {
+          const sellerId = Number(
+            entry?.seller?.sellerId ??
+            entry?.seller?.id ??
+            entry?.sellerId,
+          );
+          return {
+            userId:
+              Number.isInteger(sellerId) && sellerId > 0
+                ? sellerId
+                : null,
+            price: Number.isFinite(Number(entry?.price))
+              ? Number(entry.price)
               : null,
-          price: Number.isFinite(Number(entry?.price))
-            ? Number(entry.price)
-            : null,
-          serialNumber: entry?.serialNumber ?? null,
-        };
-      })
-      .filter((entry) => entry.userId);
+            serialNumber: entry?.serialNumber ?? null,
+          };
+        })
+        .filter((entry) => entry.userId);
 
-    return {
-      resellers,
-      source: "Roblox marketplace-sales collectible resellers",
-    };
+      return {
+        resellers,
+        source: "Roblox marketplace-sales collectible resellers",
+      };
+    } catch (error) {
+      if (![400, 401, 403, 404].includes(Number(error?.status))) {
+        throw error;
+      }
+      // Public marketplace-sales access is unavailable for this item/account.
+      // Fall through to the legacy public economy reseller endpoint.
+    }
   }
 
-  const payload = await fetchRobloxJson(
-    `${ECONOMY_API_URL}/v1/assets/${encodeURIComponent(
-      normalizedAssetId,
-    )}/resellers?limit=${requestedLimit}`,
-  );
+  let payload;
+  try {
+    payload = await fetchRobloxJson(
+      `${ECONOMY_API_URL}/v1/assets/${encodeURIComponent(
+        normalizedAssetId,
+      )}/resellers?limit=${requestedLimit}`,
+    );
+  } catch (error) {
+    if ([400, 401, 403, 404].includes(Number(error?.status))) {
+      return { resellers: [], source: null };
+    }
+    throw error;
+  }
 
   const resellers = (payload?.data ?? [])
     .map((entry) => {
