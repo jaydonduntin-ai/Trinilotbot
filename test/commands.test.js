@@ -72,7 +72,7 @@ test("/target is RAP-only while /dev retains RAP/value floors", () => {
   );
 
   assert.ok(targetMinRap, "/target should expose min_rap");
-  assert.equal(targetMinRap.min_value, 100000);
+  assert.equal(targetMinRap.min_value, 2000);
   assert.equal(targetMinValue, undefined);
 
   for (const name of ["dev"]) {
