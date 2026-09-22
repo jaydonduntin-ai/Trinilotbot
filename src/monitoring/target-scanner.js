@@ -113,6 +113,7 @@ const DEFAULT_PUBLIC_SERVER_VERIFY_BACKOFF_MS = 2 * 60 * 1000;
 const DEFAULT_PUBLIC_SERVER_CONFIRMATION_TTL_MS = 90 * 1000;
 const DEFAULT_GAME_SCAN_CANDIDATES = 5_000;
 const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 90_000;
+const DEFAULT_GAME_ROUTE_WAIT_MS = 8_000;
 const DEFAULT_GAME_SCAN_WAVE_SIZE = 300;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 50_000;
@@ -3506,7 +3507,19 @@ export async function scanGameTargets({
         offset,
         offset + DEFAULT_GAME_SCAN_WAVE_SIZE,
       );
-      const route = getInteractivePresenceRoute();
+      let route = getInteractivePresenceRoute();
+
+      if (!route) {
+        route = await waitForInteractivePresenceRoute({
+          maxWaitMs: Math.min(
+            getPositiveIntegerEnv(
+              "ROBLOX_GAME_ROUTE_WAIT_MS",
+              DEFAULT_GAME_ROUTE_WAIT_MS,
+            ),
+            Math.max(0, scanTimeBudgetMs - (Date.now() - startedAt)),
+          ),
+        });
+      }
 
       if (!route) {
         presenceRateLimited = true;
@@ -5678,6 +5691,24 @@ function getInteractivePresenceRoute() {
     fallbackOnRateLimit:
       !usingFallback && !fallbackBackingOff,
   };
+}
+
+async function waitForInteractivePresenceRoute({
+  maxWaitMs = DEFAULT_GAME_ROUTE_WAIT_MS,
+  pollIntervalMs = 500,
+} = {}) {
+  const startedAt = Date.now();
+  let route = getInteractivePresenceRoute();
+
+  while (!route && Date.now() - startedAt < maxWaitMs) {
+    await sleep(Math.min(
+      pollIntervalMs,
+      Math.max(50, maxWaitMs - (Date.now() - startedAt)),
+    ));
+    route = getInteractivePresenceRoute();
+  }
+
+  return route;
 }
 
 async function filterPublicJoinablePlayers(players) {
