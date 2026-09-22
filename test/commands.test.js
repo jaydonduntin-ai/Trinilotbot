@@ -72,7 +72,7 @@ test("/target is RAP-only while /dev retains RAP/value floors", () => {
   );
 
   assert.ok(targetMinRap, "/target should expose min_rap");
-  assert.equal(targetMinRap.min_value, 150000);
+  assert.equal(targetMinRap.min_value, 100000);
   assert.equal(targetMinValue, undefined);
 
   for (const name of ["dev"]) {
@@ -154,6 +154,7 @@ test("/rbx2adm uses a 100K RAP minimum and defaults to 50 results", async () => 
   const limit = definition.options.find((option) => option.name === "limit");
 
   assert.equal(minRap.min_value, 100000);
+  assert.match(minRap.description, /100,000/);
   assert.equal(limit.max_value, 50);
   assert.match(limit.description, /default 50, max 50/i);
 });
