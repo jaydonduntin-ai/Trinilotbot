@@ -1,12 +1,13 @@
 import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
-  DEFAULT_TARGET_RAP,
   DEFAULT_TARGET_VALUE,
   MAX_TARGETS,
-  MIN_TARGET_THRESHOLD,
   MAX_TARGET_THRESHOLD,
   scanDeveloperTargets,
 } from "../monitoring/target-scanner.js";
+
+const DEV_MIN_THRESHOLD = 150_000;
+const DEV_DEFAULT_RAP = 150_000;
 
 export const devCommand = {
   definition: new SlashCommandBuilder()
@@ -18,18 +19,18 @@ export const devCommand = {
       option
         .setName("min_value")
         .setDescription(
-          `Value floor: ${MIN_TARGET_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEFAULT_TARGET_VALUE.toLocaleString()}.`,
+          `Value floor: ${DEV_MIN_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEFAULT_TARGET_VALUE.toLocaleString()}.`,
         )
-        .setMinValue(MIN_TARGET_THRESHOLD)
+        .setMinValue(DEV_MIN_THRESHOLD)
         .setMaxValue(MAX_TARGET_THRESHOLD),
     )
     .addIntegerOption((option) =>
       option
         .setName("min_rap")
         .setDescription(
-          `RAP floor: ${MIN_TARGET_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEFAULT_TARGET_RAP.toLocaleString()}.`,
+          `RAP floor: ${DEV_MIN_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEV_DEFAULT_RAP.toLocaleString()}.`,
         )
-        .setMinValue(MIN_TARGET_THRESHOLD)
+        .setMinValue(DEV_MIN_THRESHOLD)
         .setMaxValue(MAX_TARGET_THRESHOLD),
     )
     .addIntegerOption((option) =>
@@ -46,7 +47,7 @@ export const devCommand = {
     const minimumValue =
       interaction.options.getInteger("min_value") ?? DEFAULT_TARGET_VALUE;
     const minimumRap =
-      interaction.options.getInteger("min_rap") ?? DEFAULT_TARGET_RAP;
+      interaction.options.getInteger("min_rap") ?? DEV_DEFAULT_RAP;
     const limit = interaction.options.getInteger("limit") ?? MAX_TARGETS;
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
