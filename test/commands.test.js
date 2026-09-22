@@ -10,6 +10,7 @@ test("all slash commands are registered", () => {
     "limitedowners",
     "rbx2dc",
     "rbx2mm2",
+    "rbx2adm",
     "dc2rb",
     "alerts",
     "dev",
