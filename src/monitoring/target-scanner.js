@@ -113,7 +113,7 @@ const DEFAULT_PUBLIC_SERVER_VERIFY_BACKOFF_MS = 2 * 60 * 1000;
 const DEFAULT_PUBLIC_SERVER_CONFIRMATION_TTL_MS = 90 * 1000;
 const DEFAULT_GAME_SCAN_CANDIDATES = 5_000;
 const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 90_000;
-const DEFAULT_GAME_ROUTE_WAIT_MS = 8_000;
+const DEFAULT_GAME_ROUTE_WAIT_MS = 30_000;
 const DEFAULT_GAME_SCAN_WAVE_SIZE = 300;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 50_000;
@@ -159,10 +159,10 @@ const JAILBREAK_TRADE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const PS99_PUBLIC_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const SEARCH_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 20;
-const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 8 * 60 * 1000;
-const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 100;
-const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 2_500;
+const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 50;
+const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 5_000;
 const DEFAULT_TARGET_LIVE_CACHE_BACKOFF_MS = 10 * 60 * 1000;
 const DEFAULT_DEVELOPER_INDEX_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
 const DEFAULT_PRESENCE_API_BACKOFF_MS = 3 * 60 * 1000;
@@ -522,7 +522,7 @@ export function startTargetCandidatePoolWarmup() {
   ])
     .then(warmCandidates)
     .then(() => {
-      const initialLiveTimer = setTimeout(refreshLive, 30_000);
+      const initialLiveTimer = setTimeout(refreshLive, 120_000);
       initialLiveTimer.unref?.();
     });
 
@@ -559,7 +559,11 @@ export async function refreshTargetLiveCache() {
       skippedForInteractive: true,
     };
   }
-  if (now < liveCacheBackoffUntil || now < presenceApiBackoffUntil) {
+  if (
+    now < liveCacheBackoffUntil ||
+    now < presenceApiBackoffUntil ||
+    now < fallbackPresenceBackoffUntil
+  ) {
     return {
       verifiedIndexCount: getTargetLiveCacheStats().verifiedIndexCount,
       checkedCount: 0,
@@ -3532,7 +3536,7 @@ export async function scanGameTargets({
         stopOnRateLimit: true,
         presenceFetcher: route.presenceFetcher,
         fallbackFetcher: route.fallbackFetcher,
-        fallbackOnRateLimit: route.fallbackOnRateLimit,
+        fallbackOnRateLimit: false,
       });
 
       presenceScannedCount += presenceScan.checkedIds.length;
