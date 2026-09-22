@@ -6,13 +6,13 @@ import {
   scanMm2RapActivity,
 } from "../monitoring/target-scanner.js";
 
-const MIN_MM2_RAP = 150_000;
+const MIN_MM2_RAP = 100_000;
 
 export const rbx2mm2Command = {
   definition: new SlashCommandBuilder()
     .setName("rbx2mm2")
     .setDescription(
-      "Find up to 50 public-joinable 150K+ RAP users currently playing Murder Mystery 2.",
+      "Find up to 50 public-joinable 100K+ RAP users currently playing Murder Mystery 2.",
     )
     .addIntegerOption((option) =>
       option
