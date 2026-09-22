@@ -3373,7 +3373,7 @@ export async function scanGameTargets({
           universeId: game.universeId,
           minimumValue,
           minimumRap,
-          players: cachedJoinable
+          players: diversifyPlayersByRap(cachedJoinable)
             .slice(0, requestedLimit)
             .map(({ qualifies, ...player }) => ({
               ...player,
@@ -3435,7 +3435,7 @@ export async function scanGameTargets({
           universeId: game.universeId,
           minimumValue,
           minimumRap,
-          players: cachedVerified
+          players: diversifyPlayersByRap(cachedVerified)
             .slice(0, requestedLimit)
             .map(({ qualifies, ...player }) => ({
               ...player,
@@ -3649,7 +3649,7 @@ export async function scanGameTargets({
       universeId: game.universeId,
       minimumValue,
       minimumRap,
-      players: shuffle(stillInGamePlayers)
+      players: diversifyPlayersByRap(stillInGamePlayers)
         .slice(0, requestedLimit)
         .map(({ qualifies, ...player }) => player),
       candidateCount: discovery.userIds.length,
@@ -6556,6 +6556,24 @@ function getPoolSourceCounts() {
   return counts;
 }
 
+function getRapBandPriority(candidate, minimumRap) {
+  const rap = Number(candidate?.lastKnownRap);
+  if (!Number.isFinite(rap) || minimumRap === null || minimumRap === undefined) {
+    return 0;
+  }
+
+  const floor = Number(minimumRap);
+  if (rap < floor) return -1_000;
+
+  // Favor the broad 100k-1m population instead of repeatedly surfacing
+  // only ultra-high-RAP accounts. Keep higher bands represented, just not dominant.
+  if (rap < 250_000) return 520;
+  if (rap < 500_000) return 460;
+  if (rap < 1_000_000) return 380;
+  if (rap < 5_000_000) return 180;
+  return 80;
+}
+
 function getCandidatePriority(
   candidate,
   { minimumValue = null, minimumRap = null } = {},
@@ -6585,6 +6603,7 @@ function getCandidatePriority(
     Number(candidate.lastKnownRap) >= Number(minimumRap)
   ) {
     score += 250;
+    score += getRapBandPriority(candidate, minimumRap);
   }
 
   const weights = new Map([
@@ -6771,13 +6790,50 @@ function selectCandidatesFromPool(
     }
   }
 
-  const prioritizedWatchlist = shuffle(hotWatchlist).sort((left, right) => {
-    const priorityDelta =
-      getCandidatePriority(right, { minimumValue, minimumRap }) -
-      getCandidatePriority(left, { minimumValue, minimumRap });
-    if (priorityDelta !== 0) return priorityDelta;
-    return (left.lastCheckedAt || 0) - (right.lastCheckedAt || 0);
-  });
+  const watchlistBands = {
+    low: [],
+    mid: [],
+    high: [],
+    ultra: [],
+    unknown: [],
+  };
+  for (const candidate of hotWatchlist) {
+    const rap = Number(candidate?.lastKnownRap);
+    if (!Number.isFinite(rap)) {
+      watchlistBands.unknown.push(candidate);
+    } else if (rap < 250_000) {
+      watchlistBands.low.push(candidate);
+    } else if (rap < 500_000) {
+      watchlistBands.mid.push(candidate);
+    } else if (rap < 1_000_000) {
+      watchlistBands.high.push(candidate);
+    } else {
+      watchlistBands.ultra.push(candidate);
+    }
+  }
+
+  const sortBand = (values) =>
+    shuffle(values).sort((left, right) => {
+      const priorityDelta =
+        getCandidatePriority(right, { minimumValue, minimumRap }) -
+        getCandidatePriority(left, { minimumValue, minimumRap });
+      if (priorityDelta !== 0) return priorityDelta;
+      return (left.lastCheckedAt || 0) - (right.lastCheckedAt || 0);
+    });
+
+  const bandLists = [
+    sortBand(watchlistBands.low),
+    sortBand(watchlistBands.mid),
+    sortBand(watchlistBands.high),
+    sortBand(watchlistBands.ultra),
+    sortBand(watchlistBands.unknown),
+  ];
+  const prioritizedWatchlist = [];
+  while (bandLists.some((band) => band.length > 0)) {
+    for (const band of bandLists) {
+      if (band.length > 0) prioritizedWatchlist.push(band.shift());
+    }
+  }
 
   const neverChecked = shuffle(
     fresh.filter((candidate) => !candidate.lastCheckedAt),
@@ -6824,6 +6880,27 @@ function selectCandidatesFromPool(
         Math.max(0, limit - preferred.length),
     ),
   };
+}
+
+function diversifyPlayersByRap(players) {
+  const bands = [[], [], [], [], []];
+  for (const player of players ?? []) {
+    const rap = Number(player?.rapValue);
+    if (!Number.isFinite(rap)) bands[4].push(player);
+    else if (rap < 250_000) bands[0].push(player);
+    else if (rap < 500_000) bands[1].push(player);
+    else if (rap < 1_000_000) bands[2].push(player);
+    else bands[3].push(player);
+  }
+
+  const shuffledBands = bands.map((band) => shuffle(band));
+  const result = [];
+  while (shuffledBands.some((band) => band.length > 0)) {
+    for (const band of shuffledBands) {
+      if (band.length > 0) result.push(band.shift());
+    }
+  }
+  return result;
 }
 
 function markCandidatesChecked(userIds, now = Date.now()) {
