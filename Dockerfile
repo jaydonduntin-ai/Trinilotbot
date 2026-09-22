@@ -6,5 +6,6 @@ COPY src ./src
 COPY scripts ./scripts
 COPY test ./test
 COPY data ./data
+COPY render.yaml ./render.yaml
 RUN npm test && npm run check
 CMD ["npm", "start"]
