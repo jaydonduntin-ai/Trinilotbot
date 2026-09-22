@@ -737,6 +737,14 @@ function pruneLiveTargetCache(
   }
 }
 
+export function getFreshLiveTargetPresences({
+  minimumValue = null,
+  minimumRap = getMinimumTargetRap(),
+  limit = MAX_TARGETS + 5,
+} = {}) {
+  return getFreshLiveCachePresences({ minimumValue, minimumRap, limit });
+}
+
 function getFreshLiveCachePresences({
   minimumValue = null,
   minimumRap = null,
