@@ -156,6 +156,7 @@ const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 8 * 60 * 1000;
 const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 100;
 const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 2_500;
 const DEFAULT_TARGET_LIVE_CACHE_BACKOFF_MS = 10 * 60 * 1000;
+const DEFAULT_DEVELOPER_INDEX_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
 const DEFAULT_PRESENCE_API_BACKOFF_MS = 3 * 60 * 1000;
 const DEFAULT_FALLBACK_PRESENCE_BACKOFF_MS = 5 * 60 * 1000;
 const DEFAULT_PRESENCE_TIMEOUT_BACKOFF_MS = 90_000;
@@ -245,6 +246,7 @@ let lastMarketplaceRefreshAt = 0;
 let lastJailbreakTradeRefreshAt = 0;
 let lastPs99PublicRefreshAt = 0;
 let lastSearchRefreshAt = 0;
+let lastDeveloperIndexRefreshAt = 0;
 let limitedSeedCursor = 0;
 const limitedOwnerUnavailableAssetIds = new Set();
 let jailbreakDisabledLogged = false;
@@ -294,6 +296,18 @@ async function ensureCandidateDatabaseHydrated() {
         const userId = Number(raw?.userId);
         if (!Number.isInteger(userId) || userId <= 0) continue;
 
+        const persistedSources = new Set(
+          Array.isArray(raw?.sources)
+            ? raw.sources.filter(Boolean).map(String)
+            : [],
+        );
+        if (
+          persistedSources.has("Roblox public experience creators") ||
+          persistedSources.has("Roblox public experience creator-group owners")
+        ) {
+          developerCandidateIds.add(userId);
+        }
+
         candidatePool.set(userId, {
           userId,
           firstSeenAt: Number(raw?.firstSeenAt) || Date.now(),
@@ -316,11 +330,7 @@ async function ensureCandidateDatabaseHydrated() {
             : null,
           lastKnownValueAt: Number(raw?.lastKnownValueAt) || 0,
           lastKnownValueSource: raw?.lastKnownValueSource ?? null,
-          sources: new Set(
-            Array.isArray(raw?.sources)
-              ? raw.sources.filter(Boolean).map(String)
-              : [],
-          ),
+          sources: persistedSources,
         });
       }
 
@@ -451,6 +461,16 @@ export function startTargetCandidatePoolWarmup() {
       console.info(
         `Target refresh yield: ${yieldStats.tradeAds ?? 0} trade-ads · ${yieldStats.limitedResellers ?? 0} limited-resellers · ${yieldStats.limitedOwners ?? 0} limited-owners · ${yieldStats.marketplaceOwners ?? 0} marketplace-owners · ${yieldStats.marketplaceCreators ?? 0} marketplace-creators · ${yieldStats.marketplaceGroupMembers ?? 0} marketplace-group-members · ${yieldStats.userSearch ?? 0} Roblox-search · ${yieldStats.rolimonsSearch ?? 0} Rolimon-search · ${yieldStats.groupSearchMembers ?? 0} group-search · ${yieldStats.groupGraphMembers ?? 0} group-graph · ${yieldStats.jailbreakTrades ?? 0} jailbreak.`,
       );
+      const now = Date.now();
+      if (
+        now - lastDeveloperIndexRefreshAt >=
+        DEFAULT_DEVELOPER_INDEX_REFRESH_INTERVAL_MS
+      ) {
+        lastDeveloperIndexRefreshAt = now;
+        void refreshDeveloperIndexFromLiveCache().catch((error) => {
+          console.warn("Background developer-index refresh failed:", error);
+        });
+      }
     } catch (error) {
       console.warn("Background target candidate refresh failed:", error);
     }
@@ -1252,6 +1272,119 @@ export async function scanDeveloperTargets({
   }
 }
 
+async function refreshDeveloperIndexFromLiveCache() {
+  await ensureCandidateDatabaseHydrated();
+
+  const route = getInteractivePresenceRoute();
+  if (!route) return { observedGames: 0, indexed: 0, skipped: "presence-backoff" };
+
+  const cachedPresences = getFreshLiveCachePresences({
+    minimumValue: null,
+    minimumRap: null,
+    limit: 250,
+  }).filter(
+    (presence) =>
+      Number(presence?.userPresenceType) === 2 &&
+      Number.isInteger(Number(presence?.universeId)) &&
+      Number(presence.universeId) > 0,
+  );
+
+  const universeIds = [
+    ...new Set(cachedPresences.map((presence) => Number(presence.universeId))),
+  ].slice(0, 80);
+
+  if (universeIds.length === 0) {
+    return { observedGames: 0, indexed: 0 };
+  }
+
+  const games = await mapWithConcurrency(universeIds, 3, async (universeId) => {
+    try {
+      return await getGameDetails(universeId);
+    } catch (error) {
+      if (Number(error?.status) === 429) {
+        presenceApiBackoffUntil = Math.max(
+          presenceApiBackoffUntil,
+          Date.now() + DEFAULT_PRESENCE_API_BACKOFF_MS,
+        );
+      }
+      return null;
+    }
+  });
+
+  const directCreatorIds = new Set();
+  const groupIds = new Set();
+
+  for (const game of games.filter(Boolean)) {
+    const creator = game?.creator ?? {};
+    const creatorId = Number(
+      creator?.id ?? creator?.creatorTargetId ?? game?.creatorTargetId,
+    );
+    const creatorType = String(
+      creator?.type ?? creator?.creatorType ?? game?.creatorType ?? "",
+    ).toLowerCase();
+
+    if (!Number.isInteger(creatorId) || creatorId <= 0) continue;
+    if (creatorType === "user") directCreatorIds.add(creatorId);
+    if (creatorType === "group") groupIds.add(creatorId);
+  }
+
+  const ownerIds = new Set();
+  if (Date.now() >= groupBackoffUntil) {
+    const groupDetails = await mapWithConcurrency(
+      [...groupIds].slice(0, 40),
+      2,
+      async (groupId) => {
+        try {
+          return await getRobloxGroupDetails(groupId);
+        } catch (error) {
+          if (Number(error?.status) === 429) {
+            groupBackoffUntil = Math.max(
+              groupBackoffUntil,
+              Date.now() + DEFAULT_GROUP_DISCOVERY_BACKOFF_MS,
+            );
+          }
+          return null;
+        }
+      },
+    );
+
+    for (const details of groupDetails.filter(Boolean)) {
+      const ownerId = Number(
+        details?.owner?.userId ?? details?.owner?.id ?? details?.ownerUserId,
+      );
+      if (Number.isInteger(ownerId) && ownerId > 0) ownerIds.add(ownerId);
+    }
+  }
+
+  addCandidatesToPool(
+    [...directCreatorIds],
+    "Roblox public experience creators",
+    Date.now(),
+  );
+  addCandidatesToPool(
+    [...ownerIds],
+    "Roblox public experience creator-group owners",
+    Date.now(),
+  );
+
+  for (const userId of [...directCreatorIds, ...ownerIds]) {
+    developerCandidateIds.add(Number(userId));
+  }
+
+  if (directCreatorIds.size > 0 || ownerIds.size > 0) {
+    await persistCandidateDatabaseSnapshot();
+  }
+
+  console.info(
+    `Developer index refresh: ${universeIds.length} live universes · ${directCreatorIds.size} direct creators · ${ownerIds.size} group owners · ${developerCandidateIds.size} indexed total.`,
+  );
+
+  return {
+    observedGames: universeIds.length,
+    indexed: developerCandidateIds.size,
+  };
+}
+
 async function scanDeveloperTargetsInternal({
   minimumRap,
   minimumValue,
@@ -1359,12 +1492,34 @@ async function scanDeveloperTargetsInternal({
     ),
   );
 
-  const discovery = await discoverCandidateUserIds({
-    minimumValue: null,
-    minimumRap: null,
-    respectCooldown: false,
-    maxCandidatesOverride: discoveryLimit,
-  });
+  let discovery;
+  if (developerCandidateIds.size > 0) {
+    const indexedDeveloperIds = [...developerCandidateIds]
+      .filter((userId) => candidatePool.has(Number(userId)))
+      .sort((left, right) =>
+        getCandidatePriority(candidatePool.get(Number(right)), {
+          minimumValue,
+          minimumRap,
+        }) -
+        getCandidatePriority(candidatePool.get(Number(left)), {
+          minimumValue,
+          minimumRap,
+        }),
+      )
+      .slice(0, discoveryLimit);
+
+    discovery = {
+      userIds: indexedDeveloperIds,
+      source: "persisted-developer-index",
+    };
+  } else {
+    discovery = await discoverCandidateUserIds({
+      minimumValue: null,
+      minimumRap: null,
+      respectCooldown: false,
+      maxCandidatesOverride: discoveryLimit,
+    });
+  }
 
   const initialRoute = getInteractivePresenceRoute();
   if (!initialRoute || discovery.userIds.length === 0) {
@@ -1533,6 +1688,12 @@ async function scanDeveloperTargetsInternal({
   );
   for (const id of [...directIds, ...ownerIds]) {
     developerCandidateIds.add(Number(id));
+  }
+
+  if (directIds.length > 0 || ownerIds.length > 0) {
+    await persistCandidateDatabaseSnapshot().catch((error) => {
+      console.warn("Developer candidate persistence failed:", error);
+    });
   }
 
   const developerIds = [...new Set([...directIds, ...ownerIds])];
