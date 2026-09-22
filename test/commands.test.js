@@ -14,7 +14,6 @@ test("all slash commands are registered", () => {
     "alerts",
     "dev",
     "target",
-    "scan",
   ]);
 
   for (const command of commandModules) {
@@ -59,7 +58,7 @@ test("/rbx2mm2 is RAP-only with a 150K minimum and 50-result output cap", () => 
 });
 
 
-test("/target is RAP-only while /scan and /dev retain RAP/value floors", () => {
+test("/target is RAP-only while /dev retains RAP/value floors", () => {
   const target = commandModules.find(
     (candidate) => candidate.definition.name === "target",
   );
@@ -75,7 +74,7 @@ test("/target is RAP-only while /scan and /dev retain RAP/value floors", () => {
   assert.equal(targetMinRap.min_value, 150000);
   assert.equal(targetMinValue, undefined);
 
-  for (const name of ["scan", "dev"]) {
+  for (const name of ["dev"]) {
     const command = commandModules.find(
       (candidate) => candidate.definition.name === name,
     );
@@ -119,19 +118,6 @@ test("/dev defaults to and allows up to 50 developer targets", () => {
   assert.match(limit.description, /default 50, max 50/i);
 });
 
-
-test("/scan is exhaustive by default and keeps an optional manual cap", () => {
-  const command = commandModules.find(
-    (candidate) => candidate.definition.name === "scan",
-  );
-  const definition = command.definition.toJSON();
-  const limit = definition.options.find((option) => option.name === "limit");
-
-  assert.ok(limit);
-  assert.equal(limit.required, false);
-  assert.equal(limit.max_value, 5000);
-  assert.match(limit.description, /omit for exhaustive\/resumable scanning/i);
-});
 
 
 test("Discord command and option descriptions stay within 100 characters", () => {
