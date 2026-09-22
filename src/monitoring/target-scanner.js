@@ -943,8 +943,8 @@ async function scanDiscoveredTargetsInternal({
     cachedJoinablePlayers = finalCached.players;
 
     if (finalCached.players.length >= requestedLimit) {
-      const selectedPlayers = sortTargetPlayersForPriority(
-        finalCached.players,
+      const selectedPlayers = diversifyPlayersByRap(
+        sortTargetPlayersForPriority(finalCached.players),
       )
         .slice(0, requestedLimit)
         .map(({ qualifies, ...player }) => player);
@@ -1108,17 +1108,11 @@ async function scanDiscoveredTargetsInternal({
       (route.usingFallback && presenceScan.checkedIds.length > 0) ||
       presenceScan.usedFallback === true;
 
-    const inGamePresences = presenceScan.presences
-      .filter(
+    const inGamePresences = diversifyPresencesByRap(
+      presenceScan.presences.filter(
         (presence) => Number(presence?.userPresenceType) === 2,
-      )
-      .sort((left, right) =>
-        compareTargetPresences(
-          left,
-          right,
-          { minimumValue, minimumRap },
-        ),
-      );
+      ),
+    );
 
     for (const presence of inGamePresences) {
       const userId = Number(presence.userId);
@@ -3730,6 +3724,36 @@ function compareTargetPresences(
       { minimumValue, minimumRap },
     )
   );
+}
+
+function diversifyPresencesByRap(presences) {
+  const bands = [[], [], [], [], []];
+  for (const presence of presences ?? []) {
+    const candidate = candidatePool.get(Number(presence?.userId));
+    const rap = Number(candidate?.lastKnownRap);
+    if (!Number.isFinite(rap)) bands[4].push(presence);
+    else if (rap < 250_000) bands[0].push(presence);
+    else if (rap < 500_000) bands[1].push(presence);
+    else if (rap < 1_000_000) bands[2].push(presence);
+    else bands[3].push(presence);
+  }
+
+  const sortedBands = bands.map((band) =>
+    shuffle(band).sort((left, right) =>
+      compareTargetPresences(left, right, {
+        minimumValue: null,
+        minimumRap: getMinimumTargetRap(),
+      }),
+    ),
+  );
+
+  const result = [];
+  while (sortedBands.some((band) => band.length > 0)) {
+    for (const band of sortedBands) {
+      if (band.length > 0) result.push(band.shift());
+    }
+  }
+  return result;
 }
 
 function sortTargetPlayersForPriority(players) {
