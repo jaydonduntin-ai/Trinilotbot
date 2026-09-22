@@ -1,5 +1,5 @@
 import { EmbedBuilder } from "discord.js";
-import { getPresenceBatched } from "./target-scanner.js";
+import { getPresenceBatched, getFreshLiveTargetPresences } from "./target-scanner.js";
 import { getFollowUserJoinUrl } from "../roblox/game-session.js";
 import {
   getScanWatchlist,
@@ -9,6 +9,11 @@ import {
 const DEFAULT_SCAN_WATCH_INTERVAL_MS = 60 * 1000;
 const DEFAULT_SCAN_WATCH_USERS_PER_CYCLE = 200;
 const PRESENCE_BATCH_SIZE = 50;
+const DEFAULT_AUTO_TARGET_FEED_INTERVAL_MS = 60 * 1000;
+const DEFAULT_AUTO_TARGET_FEED_LIMIT = 25;
+const DEFAULT_AUTO_TARGET_MIN_RAP = 2_000;
+const autoFeedSeenAt = new Map();
+let autoFeedRunning = false;
 let scanWatcherRunning = false;
 let scanWatcherCursor = 0;
 
@@ -35,6 +40,8 @@ export async function startScanWatcher(client) {
   initialTimer.unref?.();
   const interval = setInterval(run, intervalMs);
   interval.unref?.();
+
+  startAutomaticTargetFeed(client);
 }
 
 async function checkScanWatchlist(client) {
@@ -112,7 +119,7 @@ async function checkScanWatchlist(client) {
   await updateScanPresences(updates);
 }
 
-async function publishScanAlert(client, entry, presence) {
+async function publishScanAlert(client, entry, presence, { footer = "Triggered by /scan watchlist · public Roblox presence" } = {}) {
   const profileUrl =
     `https://www.roblox.com/users/${entry.userId}/profile`;
   const followJoinUrl = getFollowUserJoinUrl(entry.userId);
@@ -155,7 +162,7 @@ async function publishScanAlert(client, entry, presence) {
       },
     )
     .setFooter({
-      text: "Triggered by /scan watchlist · public Roblox presence",
+      text: footer,
     })
     .setTimestamp();
 
@@ -169,4 +176,87 @@ async function publishScanAlert(client, entry, presence) {
 function readPositiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+
+function startAutomaticTargetFeed(client) {
+  const intervalMs = readPositiveInteger(
+    process.env.ROBLOX_AUTO_TARGET_FEED_INTERVAL_MS,
+    DEFAULT_AUTO_TARGET_FEED_INTERVAL_MS,
+  );
+  const limit = readPositiveInteger(
+    process.env.ROBLOX_AUTO_TARGET_FEED_LIMIT,
+    DEFAULT_AUTO_TARGET_FEED_LIMIT,
+  );
+  const minimumRap = readPositiveInteger(
+    process.env.ROBLOX_AUTO_TARGET_MIN_RAP,
+    DEFAULT_AUTO_TARGET_MIN_RAP,
+  );
+
+  const run = async () => {
+    if (autoFeedRunning) return;
+    autoFeedRunning = true;
+    try {
+      const channelIds = await getAutomaticTargetChannelIds();
+      if (channelIds.length === 0) return;
+
+      const presences = getFreshLiveTargetPresences({
+        minimumRap,
+        limit,
+      });
+      const now = Date.now();
+      const dedupeMs = 6 * 60 * 60 * 1000;
+
+      for (const presence of presences) {
+        const userId = Number(presence?.userId);
+        if (!Number.isInteger(userId) || userId <= 0) continue;
+        const lastSentAt = Number(autoFeedSeenAt.get(userId) || 0);
+        if (now - lastSentAt < dedupeMs) continue;
+
+        const entry = {
+          userId,
+          username: null,
+          displayName: null,
+          rapValue: null,
+          channels: channelIds,
+        };
+        await publishScanAlert(client, entry, presence, {
+          footer: `Automatic discovery feed · verified ${minimumRap.toLocaleString()}+ RAP candidate`,
+        }).catch((error) => {
+          console.warn(`Automatic target feed publish failed for Roblox user ${userId}:`, error);
+        });
+        autoFeedSeenAt.set(userId, now);
+      }
+
+      for (const [userId, sentAt] of autoFeedSeenAt) {
+        if (now - sentAt > dedupeMs) autoFeedSeenAt.delete(userId);
+      }
+    } finally {
+      autoFeedRunning = false;
+    }
+  };
+
+  const initialTimer = setTimeout(run, 45_000);
+  initialTimer.unref?.();
+  const interval = setInterval(run, intervalMs);
+  interval.unref?.();
+}
+
+async function getAutomaticTargetChannelIds() {
+  const configured = String(process.env.ROBLOX_AUTO_TARGET_CHANNEL_ID ?? "").trim();
+  if (/^\d+$/.test(configured)) return [configured];
+
+  const entries = await getScanWatchlist();
+  const counts = new Map();
+  for (const entry of entries) {
+    for (const rawChannelId of entry.channels ?? []) {
+      const channelId = String(rawChannelId ?? "").trim();
+      if (!/^\d+$/.test(channelId)) continue;
+      counts.set(channelId, (counts.get(channelId) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 1)
+    .map(([channelId]) => channelId);
 }
