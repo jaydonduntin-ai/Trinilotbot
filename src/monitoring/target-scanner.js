@@ -6629,7 +6629,11 @@ function pruneCandidatePool(now = Date.now()) {
     }
   }
 
-  if (candidatePool.size <= maxSize) return;
+  const hotMaxSize = getPositiveIntegerEnv(
+    "ROBLOX_TARGET_HOT_POOL_MAX_SIZE",
+    Math.max(maxSize, DEFAULT_HOT_POOL_MAX_SIZE),
+  );
+  if (candidatePool.size <= hotMaxSize) return;
 
   const rankedForRemoval = [...candidatePool.values()].sort(
     (left, right) => {
@@ -6652,12 +6656,6 @@ function pruneCandidatePool(now = Date.now()) {
       return Number(left.lastSeenAt || 0) - Number(right.lastSeenAt || 0);
     },
   );
-
-  const hotMaxSize = getPositiveIntegerEnv(
-    "ROBLOX_TARGET_HOT_POOL_MAX_SIZE",
-    Math.max(maxSize, DEFAULT_HOT_POOL_MAX_SIZE),
-  );
-  if (candidatePool.size <= hotMaxSize) return;
 
   const candidatesToRemove = rankedForRemoval.slice(
     0,
