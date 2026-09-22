@@ -107,9 +107,9 @@ const DEFAULT_PUBLIC_SERVER_VERIFY_INTER_GROUP_DELAY_MS = 750;
 const DEFAULT_PUBLIC_SERVER_VERIFY_INTER_PAGE_DELAY_MS = 250;
 const DEFAULT_PUBLIC_SERVER_VERIFY_BACKOFF_MS = 2 * 60 * 1000;
 const DEFAULT_PUBLIC_SERVER_CONFIRMATION_TTL_MS = 90 * 1000;
-const DEFAULT_GAME_SCAN_CANDIDATES = 500;
-const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 25_000;
-const DEFAULT_GAME_SCAN_WAVE_SIZE = 250;
+const DEFAULT_GAME_SCAN_CANDIDATES = 5_000;
+const DEFAULT_GAME_SCAN_TIME_BUDGET_MS = 90_000;
+const DEFAULT_GAME_SCAN_WAVE_SIZE = 300;
 const DEFAULT_MAX_ACTIVE_TO_VERIFY = 160;
 const DEFAULT_POOL_MAX_SIZE = 50_000;
 const DEFAULT_POOL_TTL_MS = 48 * 60 * 60 * 1000;
@@ -257,6 +257,7 @@ let candidateRefreshPromise = null;
 let lastCandidatePoolRefreshAt = 0;
 let mm2PresenceCursor = 0;
 let mm2ValueDiscoveryCursor = 0;
+const gamePresenceCursors = new Map();
 let activeInteractivePresenceScans = 0;
 const presenceInteractiveQueue = [];
 const presenceBackgroundQueue = [];
@@ -2383,14 +2384,44 @@ export async function scanMm2RapActivity({
     includeGameValue: false,
     maxCandidatesOverride: getPositiveIntegerEnv(
       "ROBLOX_MM2_SCAN_MAX_CANDIDATES",
-      getPositiveIntegerEnv(
-        "ROBLOX_TARGET_POOL_MAX_SIZE",
-        DEFAULT_POOL_MAX_SIZE,
+      Math.min(
+        getPositiveIntegerEnv(
+          "ROBLOX_TARGET_POOL_MAX_SIZE",
+          DEFAULT_POOL_MAX_SIZE,
+        ),
+        20_000,
       ),
     ),
     timeBudgetMs: getPositiveIntegerEnv(
       "ROBLOX_MM2_SCAN_TIME_BUDGET_MS",
-      120_000,
+      180_000,
+    ),
+  });
+}
+
+export async function scanAdoptMeRapActivity({
+  minimumRap = DEFAULT_TARGET_RAP,
+  limit = MAX_TARGETS,
+} = {}) {
+  return scanGameTargets({
+    gameKey: "adopt-me",
+    minimumValue: null,
+    minimumRap,
+    limit,
+    includeGameValue: false,
+    maxCandidatesOverride: getPositiveIntegerEnv(
+      "ROBLOX_ADM_SCAN_MAX_CANDIDATES",
+      Math.min(
+        getPositiveIntegerEnv(
+          "ROBLOX_TARGET_POOL_MAX_SIZE",
+          DEFAULT_POOL_MAX_SIZE,
+        ),
+        20_000,
+      ),
+    ),
+    timeBudgetMs: getPositiveIntegerEnv(
+      "ROBLOX_ADM_SCAN_TIME_BUDGET_MS",
+      180_000,
     ),
   });
 }
@@ -3434,6 +3465,16 @@ export async function scanGameTargets({
             ),
     });
 
+    const originalDiscoveryUserIds = discovery.userIds;
+    const gameCursor = gamePresenceCursors.get(gameKey) ?? 0;
+    if (originalDiscoveryUserIds.length > 0) {
+      const start = gameCursor % originalDiscoveryUserIds.length;
+      discovery.userIds = [
+        ...originalDiscoveryUserIds.slice(start),
+        ...originalDiscoveryUserIds.slice(0, start),
+      ];
+    }
+
     const startedAt = Date.now();
     const verifiedPlayers = [];
     const activeSeen = new Map();
@@ -3560,6 +3601,15 @@ export async function scanGameTargets({
       } else {
         break;
       }
+    }
+
+    if (discovery.userIds.length > 0) {
+      gamePresenceCursors.set(
+        gameKey,
+        ((gamePresenceCursors.get(gameKey) ?? 0) +
+          Math.max(presenceScannedCount, DEFAULT_GAME_SCAN_WAVE_SIZE)) %
+          discovery.userIds.length,
+      );
     }
 
     const stillInGamePlayers = await revalidatePlayersForGame(
