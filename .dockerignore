@@ -4,7 +4,6 @@ npm-debug.log*
 .env
 .env.*
 !.env.example
-test
-scripts
+
 FINAL-TEST-REPORT.txt
 DEPLOY_RENDER.md
