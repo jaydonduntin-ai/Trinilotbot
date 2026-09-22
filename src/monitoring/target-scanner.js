@@ -201,7 +201,10 @@ const GROUP_SEARCH_TERMS = [
   "mm2","murder mystery","adopt me","blade ball","pet simulator 99","ps99",
   "roblox","gaming","community","trading","players","fans","clan","group",
   "adopt","limited","trade","roleplay","pvp","builders","collectors",
-  "market","social","friends","games"
+  "market","social","friends","games",
+  "studio","studios","development","developer","developers","experience",
+  "experiences","interactive","productions","games studio","game studio",
+  "official studio","official games","team","collective"
 ];
 
 const candidatePool = new Map();
@@ -303,7 +306,8 @@ async function ensureCandidateDatabaseHydrated() {
         );
         if (
           persistedSources.has("Roblox public experience creators") ||
-          persistedSources.has("Roblox public experience creator-group owners")
+          persistedSources.has("Roblox public experience creator-group owners") ||
+          persistedSources.has("Roblox developer-source seed")
         ) {
           developerCandidateIds.add(userId);
         }
@@ -1275,13 +1279,52 @@ export async function scanDeveloperTargets({
 async function refreshDeveloperIndexFromLiveCache() {
   await ensureCandidateDatabaseHydrated();
 
+  const now = Date.now();
+  const sourceSeedIds = [...candidatePool.values()]
+    .filter((candidate) => {
+      const sources = candidate?.sources ?? new Set();
+      return (
+        sources.has("Roblox public group owners") ||
+        sources.has("Roblox Marketplace creators") ||
+        sources.has("Roblox public experience creators") ||
+        sources.has("Roblox public experience creator-group owners")
+      );
+    })
+    .sort((left, right) =>
+      getCandidatePriority(right, {
+        minimumValue: getMinimumTargetValue(),
+        minimumRap: getMinimumTargetRap(),
+      }) -
+      getCandidatePriority(left, {
+        minimumValue: getMinimumTargetValue(),
+        minimumRap: getMinimumTargetRap(),
+      }),
+    )
+    .slice(0, 500)
+    .map((candidate) => Number(candidate.userId))
+    .filter((userId) => Number.isInteger(userId) && userId > 0);
+
+  for (const userId of sourceSeedIds) {
+    developerCandidateIds.add(userId);
+  }
+
   const route = getInteractivePresenceRoute();
-  if (!route) return { observedGames: 0, indexed: 0, skipped: "presence-backoff" };
+  if (!route) {
+    if (sourceSeedIds.length > 0) {
+      await persistCandidateDatabaseSnapshot().catch(() => undefined);
+    }
+    return {
+      observedGames: 0,
+      indexed: developerCandidateIds.size,
+      seededFromCandidateSources: sourceSeedIds.length,
+      skipped: "presence-backoff",
+    };
+  }
 
   const cachedPresences = getFreshLiveCachePresences({
     minimumValue: null,
     minimumRap: null,
-    limit: 250,
+    limit: 500,
   }).filter(
     (presence) =>
       Number(presence?.userPresenceType) === 2 &&
@@ -1291,7 +1334,7 @@ async function refreshDeveloperIndexFromLiveCache() {
 
   const universeIds = [
     ...new Set(cachedPresences.map((presence) => Number(presence.universeId))),
-  ].slice(0, 80);
+  ].slice(0, 160);
 
   if (universeIds.length === 0) {
     return { observedGames: 0, indexed: 0 };
@@ -1331,7 +1374,7 @@ async function refreshDeveloperIndexFromLiveCache() {
   const ownerIds = new Set();
   if (Date.now() >= groupBackoffUntil) {
     const groupDetails = await mapWithConcurrency(
-      [...groupIds].slice(0, 40),
+      [...groupIds].slice(0, 80),
       2,
       async (groupId) => {
         try {
@@ -1367,7 +1410,13 @@ async function refreshDeveloperIndexFromLiveCache() {
     Date.now(),
   );
 
-  for (const userId of [...directCreatorIds, ...ownerIds]) {
+  for (const userId of sourceSeedIds) {
+    const candidate = candidatePool.get(Number(userId));
+    if (!candidate) continue;
+    candidate.sources.add("Roblox developer-source seed");
+  }
+
+  for (const userId of [...sourceSeedIds, ...directCreatorIds, ...ownerIds]) {
     developerCandidateIds.add(Number(userId));
   }
 
@@ -1376,12 +1425,13 @@ async function refreshDeveloperIndexFromLiveCache() {
   }
 
   console.info(
-    `Developer index refresh: ${universeIds.length} live universes · ${directCreatorIds.size} direct creators · ${ownerIds.size} group owners · ${developerCandidateIds.size} indexed total.`,
+    `Developer index refresh: ${universeIds.length} live universes · ${sourceSeedIds.length} source seeds · ${directCreatorIds.size} direct creators · ${ownerIds.size} group owners · ${developerCandidateIds.size} indexed total.`,
   );
 
   return {
     observedGames: universeIds.length,
     indexed: developerCandidateIds.size,
+    seededFromCandidateSources: sourceSeedIds.length,
   };
 }
 
@@ -6410,8 +6460,11 @@ function getCandidatePriority(
     ["Rolimon's recent trade ads", 95],
     ["Pet Simulator 99 official public API", 170],
     ["Rolimon's player search", 80],
+    ["Roblox developer-source seed", 220],
+    ["Roblox public experience creators", 260],
+    ["Roblox public experience creator-group owners", 280],
     ["Roblox Marketplace creators", 55],
-    ["Roblox public group owners", 45],
+    ["Roblox public group owners", 120],
     ["Roblox public user search", 30],
     ["Roblox public followers", 25],
     ["Roblox public followings", 25],
