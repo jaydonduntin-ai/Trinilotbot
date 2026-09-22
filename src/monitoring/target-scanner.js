@@ -5402,12 +5402,25 @@ async function revalidateCurrentlyInGame(players) {
 
   const route = getInteractivePresenceRoute();
   if (!route) {
+    const fallbackPlayers = sortTargetPlayersForPriority(
+      (players ?? []).filter(
+        (player) =>
+          Number.isInteger(Number(player?.placeId)) &&
+          Number(player.placeId) > 0 &&
+          String(player?.gameId ?? "").trim(),
+      ),
+    );
+
     return {
-      players: [],
+      players: fallbackPlayers,
       leftGameCount: 0,
       unavailableCount: userIds.length,
+      nonPublicServerCount:
+        (players ?? []).length - fallbackPlayers.length,
+      publicServerVerificationErrorCount: 0,
       rateLimited: true,
       usedFallback: false,
+      preservedFreshPresence: true,
     };
   }
 
@@ -5455,9 +5468,18 @@ async function revalidateCurrentlyInGame(players) {
   const publicJoinability = await filterPublicJoinablePlayers(
     confirmedPlayers,
   );
-  const joinablePlayers = sortTargetPlayersForPriority(
+
+  let joinablePlayers = sortTargetPlayersForPriority(
     publicJoinability.players,
   );
+
+  if (
+    check.rateLimited === true &&
+    joinablePlayers.length === 0 &&
+    confirmedPlayers.length > 0
+  ) {
+    joinablePlayers = sortTargetPlayersForPriority(confirmedPlayers);
+  }
 
   return {
     players: joinablePlayers,
