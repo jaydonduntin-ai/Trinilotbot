@@ -13,8 +13,6 @@ import {
   setAllowedGuildIds,
 } from "./security/guild-lock.js";
 
-const joinBridgeServer = startJoinBridge();
-
 const token = process.env.DISCORD_BOT_TOKEN?.trim();
 
 if (!token) {
@@ -50,10 +48,17 @@ let activeHeavyCommands = 0;
 let allowedGuildIds = new Set();
 let applicationManagerUserIds = new Set();
 let shuttingDown = false;
+let startupComplete = false;
+
+const joinBridgeServer = startJoinBridge({
+  healthCheck: () =>
+    !shuttingDown && startupComplete && client.isReady(),
+});
 
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
+  startupComplete = false;
   console.info(`Received ${signal}; shutting down cleanly.`);
 
   try {
@@ -384,6 +389,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     );
   }
 
+  startupComplete = true;
   startLocalWatchdog();
   console.info("Trinilotbot startup sequence finished.");
 });

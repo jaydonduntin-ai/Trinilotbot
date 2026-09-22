@@ -7,7 +7,7 @@ import {
 
 let server = null;
 
-export function startJoinBridge() {
+export function startJoinBridge({ healthCheck = null } = {}) {
   if (server) return server;
 
   const port = Number(process.env.PORT) || 3000;
@@ -17,11 +17,12 @@ export function startJoinBridge() {
       const url = new URL(req.url ?? "/", "http://localhost");
 
       if (url.pathname === "/health") {
-        res.writeHead(200, {
+        const healthy = resolveHealthStatus(healthCheck);
+        res.writeHead(healthy ? 200 : 503, {
           "Content-Type": "text/plain; charset=utf-8",
           "Cache-Control": "no-store",
         });
-        res.end("ok");
+        res.end(healthy ? "ok" : "not ready");
         return;
       }
 
@@ -288,4 +289,14 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+
+export function resolveHealthStatus(healthCheck) {
+  if (typeof healthCheck !== "function") return true;
+  try {
+    return healthCheck() === true;
+  } catch {
+    return false;
+  }
 }
