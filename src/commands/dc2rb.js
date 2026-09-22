@@ -19,10 +19,12 @@ export const dc2rbCommand = {
       .trim();
     let association = null;
     try {
-      association = await lookupDiscordToRoblox({
+      const lookup = await lookupDiscordToRoblox({
         query: discordUser,
         guildId: interaction.guildId,
       });
+      association = lookup?.association ?? null;
+      var providerDiagnostics = lookup?.diagnostics ?? [];
     } catch (sourceError) {
       console.warn("Discord-to-Roblox public source failed:", sourceError);
     }
@@ -48,8 +50,21 @@ export const dc2rbCommand = {
         association?.conflict
           ? "**Warning:** Providers returned conflicting Roblox IDs."
           : null,
+        `**Providers checked:** ${formatProviderDiagnostics(providerDiagnostics)}`,
       ].filter(Boolean).join("\n"),
       flags: MessageFlags.Ephemeral,
     });
   },
 };
+function formatProviderDiagnostics(diagnostics) {
+  if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
+    return "No provider diagnostics available.";
+  }
+
+  return diagnostics
+    .map((entry) => {
+      const detail = entry?.detail ? ` (${entry.detail})` : "";
+      return `${entry?.provider ?? "Unknown"}: ${entry?.status ?? "unknown"}${detail}`;
+    })
+    .join(" · ");
+}
