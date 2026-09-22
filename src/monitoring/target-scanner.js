@@ -1261,6 +1261,78 @@ async function scanDeveloperTargetsInternal({
     1,
     Math.min(MAX_TARGETS, Number(limit) || DEFAULT_TARGET_COUNT),
   );
+
+  if (!getInteractivePresenceRoute()) {
+    const cachedPresences = getFreshLiveCachePresences({
+      minimumValue,
+      minimumRap,
+      limit: Math.max(requestedLimit * 4, requestedLimit + 20),
+    });
+
+    const cachedPlayers = await mapWithConcurrency(
+      cachedPresences,
+      VERIFY_CONCURRENCY,
+      (presence) =>
+        buildDiscoveredTargetPlayer(presence, {
+          minimumValue,
+          minimumRap,
+          includeGameValue: false,
+        }).catch(() => null),
+    );
+
+    const developerCached = cachedPlayers
+      .filter((player) => player?.qualifies)
+      .filter((player) => {
+        const candidate = candidatePool.get(Number(player.id));
+        const sources = [...(candidate?.sources ?? [])].join(" ").toLowerCase();
+        return (
+          sources.includes("creator") ||
+          sources.includes("group owner") ||
+          sources.includes("developer")
+        );
+      })
+      .slice(0, requestedLimit)
+      .map((player) => ({
+        ...player,
+        developerEvidence: [
+          {
+            kind: "cached-public-creator-evidence",
+            gameName: player.gameName ?? "Recently observed experience",
+            universeId: player.universeId ?? null,
+          },
+        ],
+        presenceFreshness: "recent",
+      }));
+
+    if (developerCached.length > 0) {
+      return {
+        minimumRap,
+        minimumValue,
+        players: developerCached,
+        observedGames: new Set(
+          developerCached
+            .map((player) => Number(player.universeId))
+            .filter((id) => Number.isInteger(id) && id > 0),
+        ).size,
+        developerCandidates: developerCached.length,
+        presenceChecked: 0,
+        inGameDeveloperCandidates: developerCached.length,
+        nonPublicServerCount: 0,
+        finalPresenceLeftGameCount: 0,
+        finalPresenceUnavailableCount: developerCached.length,
+        presenceRateLimited: true,
+        presenceFallbackUsed: false,
+        liveCacheHit: true,
+        sources: [
+          "Background Roblox live-presence cache",
+          "Persisted public creator/group discovery evidence",
+          "Roblox public collectibles inventory",
+          "Rolimon's public player info (RAP/value cross-check only)",
+        ],
+      };
+    }
+  }
+
   const discoveryLimit = Math.max(
     250,
     Math.min(
@@ -2021,7 +2093,12 @@ async function revalidatePlayersForGame(players, game) {
     .filter((userId) => Number.isInteger(userId) && userId > 0);
 
   const route = getInteractivePresenceRoute();
-  if (!route) return [];
+  if (!route) {
+    return players.map((player) => ({
+      ...player,
+      presenceFreshness: "recent",
+    }));
+  }
 
   const liveCheck = await getPresenceBatched(userIds, {
     maxAttempts: 1,
@@ -2052,6 +2129,16 @@ async function revalidatePlayersForGame(players, game) {
     });
 
   const publicJoinability = await filterPublicJoinablePlayers(refreshed);
+  if (
+    liveCheck.rateLimited === true &&
+    publicJoinability.players.length === 0 &&
+    refreshed.length > 0
+  ) {
+    return refreshed.map((player) => ({
+      ...player,
+      presenceFreshness: "recent",
+    }));
+  }
   return publicJoinability.players;
 }
 
@@ -3000,7 +3087,12 @@ export async function scanGameTargets({
         game,
       );
 
-      if (cachedJoinable.length >= requestedLimit) {
+      if (
+        cachedJoinable.length >= requestedLimit ||
+        ((Date.now() < presenceApiBackoffUntil ||
+          Date.now() < fallbackPresenceBackoffUntil) &&
+          cachedJoinable.length > 0)
+      ) {
         return {
           gameKey,
           gameLabel: game.label,
@@ -3033,6 +3125,60 @@ export async function scanGameTargets({
           ).length,
           verifiedCount: cachedJoinable.length,
           presenceRateLimited: Date.now() < presenceApiBackoffUntil,
+          presenceFallbackUsed: false,
+          liveCacheHit: true,
+          scanElapsedMs: Date.now() - cacheStartedAt,
+          sources: [
+            "Background verified RAP index",
+            "Background Roblox live-presence cache",
+            "Public Roblox/Rolimon's RAP verification",
+          ],
+        };
+      }
+    }
+
+    if (
+      cachedPresences.length > 0 &&
+      !getInteractivePresenceRoute()
+    ) {
+      const cachedResults = await mapWithConcurrency(
+        cachedPresences,
+        VERIFY_CONCURRENCY,
+        (presence) =>
+          buildDiscoveredTargetPlayer(presence, {
+            minimumValue,
+            minimumRap,
+            includeGameValue,
+          }).catch(() => null),
+      );
+      const cachedVerified = cachedResults.filter(
+        (player) => player?.qualifies,
+      );
+      if (cachedVerified.length > 0) {
+        return {
+          gameKey,
+          gameLabel: game.label,
+          universeId: game.universeId,
+          minimumValue,
+          minimumRap,
+          players: cachedVerified
+            .slice(0, requestedLimit)
+            .map(({ qualifies, ...player }) => ({
+              ...player,
+              presenceFreshness: "recent",
+            })),
+          candidateCount: cachedPresences.length,
+          candidatePoolSize: candidatePool.size,
+          candidateSourceCounts: getPoolSourceCounts(),
+          presenceScannedCount: 0,
+          gameActiveCount: cachedPresences.length,
+          verificationAttempts: cachedResults.length,
+          valueUnavailableCount: 0,
+          belowValueCount: 0,
+          rapUnavailableCount: 0,
+          belowRapCount: 0,
+          verifiedCount: cachedVerified.length,
+          presenceRateLimited: true,
           presenceFallbackUsed: false,
           liveCacheHit: true,
           scanElapsedMs: Date.now() - cacheStartedAt,
