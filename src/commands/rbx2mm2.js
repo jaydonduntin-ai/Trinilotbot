@@ -6,19 +6,19 @@ import {
   scanMm2RapActivity,
 } from "../monitoring/target-scanner.js";
 
-const MIN_MM2_RAP = 100_000;
+const MIN_MM2_RAP = 2_000;
 
 export const rbx2mm2Command = {
   definition: new SlashCommandBuilder()
     .setName("rbx2mm2")
     .setDescription(
-      "Find up to 50 public-joinable 100K+ RAP users currently playing Murder Mystery 2.",
+      "Find up to 50 public-joinable 2K+ RAP users currently playing Murder Mystery 2.",
     )
     .addIntegerOption((option) =>
       option
         .setName("min_rap")
         .setDescription(
-          `Minimum Roblox RAP; default 100,000.`,
+          `Minimum Roblox RAP; default 2,000.`,
         )
         .setMinValue(MIN_MM2_RAP)
         .setMaxValue(MAX_TARGET_THRESHOLD),
@@ -35,7 +35,7 @@ export const rbx2mm2Command = {
 
   async execute(interaction) {
     const minimumRap =
-      interaction.options.getInteger("min_rap") ?? 100_000;
+      interaction.options.getInteger("min_rap") ?? 2_000;
     const limit =
       interaction.options.getInteger("limit") ?? MAX_TARGETS;
 
