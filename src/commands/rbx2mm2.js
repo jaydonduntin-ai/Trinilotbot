@@ -18,7 +18,7 @@ export const rbx2mm2Command = {
       option
         .setName("min_rap")
         .setDescription(
-          `Minimum Roblox RAP; default ${DEFAULT_MM2_RAP.toLocaleString()}.`,
+          `Minimum Roblox RAP; default 100,000.`,
         )
         .setMinValue(MIN_MM2_RAP)
         .setMaxValue(MAX_TARGET_THRESHOLD),
@@ -35,7 +35,7 @@ export const rbx2mm2Command = {
 
   async execute(interaction) {
     const minimumRap =
-      interaction.options.getInteger("min_rap") ?? DEFAULT_MM2_RAP;
+      interaction.options.getInteger("min_rap") ?? 100_000;
     const limit =
       interaction.options.getInteger("limit") ?? MAX_TARGETS;
 
