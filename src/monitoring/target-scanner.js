@@ -476,6 +476,12 @@ export function startTargetCandidatePoolWarmup() {
       console.info(
         `Target refresh yield: ${yieldStats.tradeAds ?? 0} trade-ads · ${yieldStats.limitedResellers ?? 0} limited-resellers · ${yieldStats.limitedOwners ?? 0} limited-owners · ${yieldStats.marketplaceOwners ?? 0} marketplace-owners · ${yieldStats.marketplaceCreators ?? 0} marketplace-creators · ${yieldStats.marketplaceGroupMembers ?? 0} marketplace-group-members · ${yieldStats.userSearch ?? 0} Roblox-search · ${yieldStats.rolimonsSearch ?? 0} Rolimon-search · ${yieldStats.groupSearchMembers ?? 0} group-search · ${yieldStats.groupGraphMembers ?? 0} group-graph · ${yieldStats.jailbreakTrades ?? 0} jailbreak.`,
       );
+      const coldStats = await getColdCandidateDatabaseStats().catch(() => null);
+      if (coldStats) {
+        console.info(
+          `Candidate cold store: ${(coldStats.sizeBytes / 1024 / 1024).toFixed(1)}MB · hot=${candidatePool.size}/${getPositiveIntegerEnv("ROBLOX_TARGET_HOT_POOL_MAX_SIZE", DEFAULT_HOT_POOL_MAX_SIZE)} · cold-cap=${getPositiveIntegerEnv("ROBLOX_CANDIDATE_COLD_MAX_SIZE", DEFAULT_COLD_POOL_MAX_SIZE).toLocaleString()} entries.`,
+        );
+      }
       const now = Date.now();
       if (
         now - lastDeveloperIndexRefreshAt >=
@@ -6702,64 +6708,73 @@ function pruneCandidatePool(now = Date.now()) {
     "ROBLOX_TARGET_POOL_MAX_SIZE",
     DEFAULT_POOL_MAX_SIZE,
   );
-
-  for (const [userId, candidate] of candidatePool) {
-    if (now - candidate.lastSeenAt > ttlMs) {
-      candidatePool.delete(userId);
-    }
-  }
-
   const hotMaxSize = getPositiveIntegerEnv(
     "ROBLOX_TARGET_HOT_POOL_MAX_SIZE",
     Math.max(maxSize, DEFAULT_HOT_POOL_MAX_SIZE),
   );
-  if (candidatePool.size <= hotMaxSize) return;
 
-  const rankedForRemoval = [...candidatePool.values()].sort(
-    (left, right) => {
-      const priorityDelta =
-        getCandidatePriority(
-          left,
-          {
-            minimumValue: getMinimumTargetValue(),
-            minimumRap: getMinimumTargetRap(),
-          },
-        ) -
-        getCandidatePriority(
-          right,
-          {
-            minimumValue: getMinimumTargetValue(),
-            minimumRap: getMinimumTargetRap(),
-          },
-        );
-      if (priorityDelta !== 0) return priorityDelta;
-      return Number(left.lastSeenAt || 0) - Number(right.lastSeenAt || 0);
-    },
-  );
-
-  const candidatesToRemove = rankedForRemoval.slice(
-    0,
-    candidatePool.size - hotMaxSize,
-  );
-  for (const candidate of candidatesToRemove) {
-    candidatePool.delete(candidate.userId);
+  const spillCandidates = [];
+  for (const [userId, candidate] of candidatePool) {
+    if (now - candidate.lastSeenAt > ttlMs) {
+      spillCandidates.push(candidate);
+      candidatePool.delete(userId);
+    }
   }
-  void appendColdCandidates(candidatesToRemove.map(serializeCandidate)).catch(
-    (error) => console.warn("Cold candidate spill failed:", error),
-  );
 
-  const nowForCompaction = Date.now();
-  if (nowForCompaction - lastColdCompactionAt >= 60 * 60 * 1000) {
-    lastColdCompactionAt = nowForCompaction;
-    void compactColdCandidateDatabase({
-      maxEntries: getPositiveIntegerEnv(
-        "ROBLOX_CANDIDATE_COLD_MAX_SIZE",
-        DEFAULT_COLD_POOL_MAX_SIZE,
-      ),
-    }).catch((error) =>
-      console.warn("Cold candidate compaction failed:", error),
+  if (candidatePool.size > hotMaxSize) {
+    const rankedForRemoval = [...candidatePool.values()].sort(
+      (left, right) => {
+        const priorityDelta =
+          getCandidatePriority(
+            left,
+            {
+              minimumValue: getMinimumTargetValue(),
+              minimumRap: getMinimumTargetRap(),
+            },
+          ) -
+          getCandidatePriority(
+            right,
+            {
+              minimumValue: getMinimumTargetValue(),
+              minimumRap: getMinimumTargetRap(),
+            },
+          );
+        if (priorityDelta !== 0) return priorityDelta;
+        return Number(left.lastSeenAt || 0) - Number(right.lastSeenAt || 0);
+      },
     );
+
+    const overflow = rankedForRemoval.slice(
+      0,
+      candidatePool.size - hotMaxSize,
+    );
+    spillCandidates.push(...overflow);
+    for (const candidate of overflow) {
+      candidatePool.delete(candidate.userId);
+    }
   }
+
+  if (spillCandidates.length === 0) return;
+
+  const shouldCompact =
+    Date.now() - lastColdCompactionAt >= 60 * 60 * 1000;
+  if (shouldCompact) lastColdCompactionAt = Date.now();
+
+  void appendColdCandidates(
+    spillCandidates.map(serializeCandidate),
+  )
+    .then(async () => {
+      if (!shouldCompact) return;
+      await compactColdCandidateDatabase({
+        maxEntries: getPositiveIntegerEnv(
+          "ROBLOX_CANDIDATE_COLD_MAX_SIZE",
+          DEFAULT_COLD_POOL_MAX_SIZE,
+        ),
+      });
+    })
+    .catch((error) =>
+      console.warn("Cold candidate spill/compaction failed:", error),
+    );
 }
 
 function selectCandidatesFromPool(

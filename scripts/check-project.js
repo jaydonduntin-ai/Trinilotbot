@@ -18,7 +18,13 @@ for (const file of required) {
   await readFile(path.join(root, file));
 }
 
-const jsFiles = await walk(path.join(root, "src"));
+const jsFiles = (
+  await Promise.all(
+    ["src", "scripts", "test"].map((directory) =>
+      walk(path.join(root, directory)),
+    ),
+  )
+).flat();
 for (const file of jsFiles) {
   const result = spawnSync(process.execPath, ["--check", file], {
     encoding: "utf8",
@@ -29,7 +35,9 @@ for (const file of jsFiles) {
   }
 }
 
-console.log(`Static check passed: ${jsFiles.length} source files checked.`);
+console.log(
+  `Static check passed: ${jsFiles.length} JavaScript files checked across src/scripts/test.`,
+);
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });

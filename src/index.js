@@ -13,7 +13,7 @@ import {
   setAllowedGuildIds,
 } from "./security/guild-lock.js";
 
-startJoinBridge();
+const joinBridgeServer = startJoinBridge();
 
 const token = process.env.DISCORD_BOT_TOKEN?.trim();
 
@@ -28,6 +28,8 @@ process.on("unhandledRejection", (error) => {
 
 process.on("uncaughtException", (error) => {
   console.error("Uncaught exception:", error);
+  process.exitCode = 1;
+  setTimeout(() => process.exit(1), 250).unref?.();
 });
 
 const client = new Client({
@@ -36,8 +38,9 @@ const client = new Client({
 
 const HEAVY_COMMAND_NAMES = new Set([
   "target",
-  "scan",
   "rbx2mm2",
+  "rbx2adm",
+  "dev",
 ]);
 const MAX_HEAVY_COMMANDS = readPositiveInteger(
   process.env.DISCORD_HEAVY_COMMAND_MAX_CONCURRENT,
@@ -46,6 +49,44 @@ const MAX_HEAVY_COMMANDS = readPositiveInteger(
 let activeHeavyCommands = 0;
 let allowedGuildIds = new Set();
 let applicationManagerUserIds = new Set();
+let shuttingDown = false;
+
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.info(`Received ${signal}; shutting down cleanly.`);
+
+  try {
+    await client.destroy();
+  } catch (error) {
+    console.warn("Discord shutdown failed:", error);
+  }
+
+  await new Promise((resolve) => {
+    const timeout = setTimeout(resolve, 5_000);
+    timeout.unref?.();
+
+    if (!joinBridgeServer?.listening) {
+      clearTimeout(timeout);
+      resolve();
+      return;
+    }
+
+    joinBridgeServer.close(() => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+
+  process.exit(0);
+}
+
+process.once("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
+process.once("SIGINT", () => {
+  void shutdown("SIGINT");
+});
 
 const WATCHDOG_INTERVAL_MS = 10_000;
 let lastWatchdogTickAt = Date.now();
