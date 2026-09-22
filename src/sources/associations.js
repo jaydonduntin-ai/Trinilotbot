@@ -35,14 +35,12 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
   });
   if (bloxlink) results.push(bloxlink);
 
-  const roverConfigured = Boolean(
-    process.env.ROVER_ROBLOX_TO_DISCORD_URL?.trim(),
-  );
+  const roverConfigured = false;
   const rover = await lookupRoverRobloxToDiscord({ userId }).then((result) => {
     recordProvider(
       diagnostics,
       "RoVer",
-      result ? "matched" : roverConfigured ? "no-match" : "not-configured",
+      result ? "matched" : roverConfigured ? "no-match" : "reverse-lookup-unavailable",
     );
     return result;
   }).catch((error) => {
@@ -119,9 +117,7 @@ export async function lookupDiscordToRoblox({ query, guildId = null }) {
     });
     if (bloxlink) results.push(bloxlink);
 
-    const roverConfigured = Boolean(
-      process.env.ROVER_DISCORD_TO_ROBLOX_URL?.trim(),
-    );
+    const roverConfigured = true;
     const rover = await lookupRoverDiscordToRoblox({ discordId }).then(
       (result) => {
         recordProvider(
@@ -328,70 +324,28 @@ async function lookupBloxlinkDiscordToRoblox({ discordId, guildId }) {
 }
 
 async function lookupRoverRobloxToDiscord({ userId }) {
-  const template = process.env.ROVER_ROBLOX_TO_DISCORD_URL?.trim();
-  if (!template) return null;
-
-  const payload = await fetchAssociationSource(template, {
-    robloxId: userId,
-  });
-
-  const ids = [
-    ...new Set(
-      [
-        ...(Array.isArray(payload?.discordIDs) ? payload.discordIDs : []),
-        payload?.discordID,
-        payload?.discordId,
-        payload?.discord?.id,
-      ]
-        .filter(Boolean)
-        .map(String),
-    ),
-  ];
-  if (ids.length === 0) return null;
-
-  return {
-    verified: true,
-    source: "RoVer",
-    discordId: ids[0],
-    discordIds: ids,
-    discordUsername: toOptionalString(
-      payload?.discordUsername ??
-        payload?.discord?.username ??
-        payload?.discord?.name,
-    ),
-    discordGlobalName: toOptionalString(
-      payload?.discordGlobalName ?? payload?.discord?.globalName,
-    ),
-    evidenceUrl: toOptionalString(payload?.evidenceUrl),
-  };
+  // RoVer's documented public registry lookup is Discord -> Roblox.
+  // Do not fabricate a reverse endpoint when none is documented.
+  return null;
 }
 
 async function lookupRoverDiscordToRoblox({ discordId }) {
-  const template = process.env.ROVER_DISCORD_TO_ROBLOX_URL?.trim();
-  if (!template) return null;
+  const url = `https://verify.eryn.io/api/user/${encodeURIComponent(discordId)}`;
+  const payload = await fetchJson(url);
 
-  const payload = await fetchAssociationSource(template, {
-    discordId,
-  });
+  if (String(payload?.status).toLowerCase() !== "ok") return null;
 
-  const robloxId = toOptionalString(
-    payload?.robloxID ?? payload?.robloxId ?? payload?.roblox?.id,
-  );
-  const robloxUsername = toOptionalString(
-    payload?.robloxUsername ??
-      payload?.username ??
-      payload?.roblox?.username ??
-      payload?.roblox?.name,
-  );
+  const robloxId = toOptionalString(payload?.robloxId ?? payload?.robloxID);
+  const robloxUsername = toOptionalString(payload?.robloxUsername);
 
   if (!robloxId && !robloxUsername) return null;
 
   return {
     verified: true,
-    source: "RoVer",
+    source: "RoVer registry",
     robloxId,
     robloxUsername,
-    evidenceUrl: toOptionalString(payload?.evidenceUrl),
+    evidenceUrl: null,
   };
 }
 
