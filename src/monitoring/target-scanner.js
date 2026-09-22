@@ -212,6 +212,8 @@ const publicServerConfirmationCache = new Map();
 // /scan at a given threshold. The persisted /scan watchlist remains the
 // authoritative long-term dedupe source when durable storage is configured.
 const surfacedTargetIds = new Set();
+const developerCandidateIds = new Set();
+
 const scanReservedIds = new Set();
 const scanAttemptedByThreshold = new Map();
 let targetHistoryHydrated = false;
@@ -1266,8 +1268,10 @@ async function scanDeveloperTargetsInternal({
     const cachedPresences = getFreshLiveCachePresences({
       minimumValue,
       minimumRap,
-      limit: Math.max(requestedLimit * 4, requestedLimit + 20),
-    });
+      limit: Math.max(requestedLimit * 6, 200),
+    }).filter((presence) =>
+      developerCandidateIds.has(Number(presence?.userId)),
+    );
 
     const cachedPlayers = await mapWithConcurrency(
       cachedPresences,
@@ -1282,15 +1286,6 @@ async function scanDeveloperTargetsInternal({
 
     const developerCached = cachedPlayers
       .filter((player) => player?.qualifies)
-      .filter((player) => {
-        const candidate = candidatePool.get(Number(player.id));
-        const sources = [...(candidate?.sources ?? [])].join(" ").toLowerCase();
-        return (
-          sources.includes("creator") ||
-          sources.includes("group owner") ||
-          sources.includes("developer")
-        );
-      })
       .slice(0, requestedLimit)
       .map((player) => ({
         ...player,
@@ -1314,12 +1309,12 @@ async function scanDeveloperTargetsInternal({
             .map((player) => Number(player.universeId))
             .filter((id) => Number.isInteger(id) && id > 0),
         ).size,
-        developerCandidates: developerCached.length,
+        developerCandidates: developerCandidateIds.size,
         presenceChecked: 0,
         inGameDeveloperCandidates: developerCached.length,
         nonPublicServerCount: 0,
         finalPresenceLeftGameCount: 0,
-        finalPresenceUnavailableCount: developerCached.length,
+        finalPresenceUnavailableCount: 0,
         presenceRateLimited: true,
         presenceFallbackUsed: false,
         liveCacheHit: true,
@@ -1331,6 +1326,26 @@ async function scanDeveloperTargetsInternal({
         ],
       };
     }
+
+    return {
+      minimumRap,
+      minimumValue,
+      players: [],
+      observedGames: 0,
+      developerCandidates: developerCandidateIds.size,
+      presenceChecked: 0,
+      inGameDeveloperCandidates: 0,
+      nonPublicServerCount: 0,
+      finalPresenceLeftGameCount: 0,
+      finalPresenceUnavailableCount: developerCandidateIds.size,
+      presenceRateLimited: true,
+      presenceFallbackUsed: false,
+      liveCacheHit: false,
+      sources: [
+        "Persisted public creator/group discovery evidence",
+        "Background Roblox live-presence cache",
+      ],
+    };
   }
 
   const discoveryLimit = Math.max(
@@ -1516,6 +1531,9 @@ async function scanDeveloperTargetsInternal({
     "Roblox public experience creator-group owners",
     Date.now(),
   );
+  for (const id of [...directIds, ...ownerIds]) {
+    developerCandidateIds.add(Number(id));
+  }
 
   const developerIds = [...new Set([...directIds, ...ownerIds])];
   if (developerIds.length === 0) {
