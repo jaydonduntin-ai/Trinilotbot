@@ -15,6 +15,13 @@ import {
 
 const token = process.env.DISCORD_BOT_TOKEN?.trim();
 
+if (!process.env.ASSOCIATION_API_KEY?.trim()) {
+  console.error(
+    "ASSOCIATION_API_KEY is missing. Add it to Railway Variables.",
+  );
+  process.exit(1);
+}
+
 if (!token) {
   console.error("DISCORD_BOT_TOKEN is missing. Add it to Railway Variables.");
   process.exit(1);

@@ -4,6 +4,10 @@ import {
   getUsersPresenceFallback,
   isPublicGameInstance,
 } from "../roblox/api.js";
+import {
+  handleAssociationRequest,
+  initializeAssociationService,
+} from "../../services/association-service.js";
 
 let server = null;
 
@@ -11,6 +15,9 @@ export function startJoinBridge({ healthCheck = null } = {}) {
   if (server) return server;
 
   const port = Number(process.env.PORT) || 3000;
+  void initializeAssociationService().catch((error) =>
+    console.error("Association service initialization failed:", error),
+  );
 
   server = createServer(async (req, res) => {
     try {
@@ -24,6 +31,11 @@ export function startJoinBridge({ healthCheck = null } = {}) {
         });
         res.end(healthy ? "ok" : "not ready");
         return;
+      }
+
+      if (url.pathname.startsWith("/api/v2/")) {
+        const handled = await handleAssociationRequest(req, res, url);
+        if (handled !== false) return;
       }
 
       const verifiedUserMatch = url.pathname.match(

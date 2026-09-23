@@ -1,8 +1,6 @@
-import { createServer } from "node:http";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { dirname } from "node:path";
 
-const PORT = Number(process.env.PORT) || 3000;
 const API_KEY = process.env.ASSOCIATION_API_KEY?.trim() || "";
 const DATA_PATH =
   process.env.ASSOCIATION_DATA_PATH ||
@@ -18,21 +16,16 @@ let ready = false;
 let store = { rows: [] };
 let saveQueue = Promise.resolve();
 
-await loadStore();
-ready = true;
+export async function initializeAssociationService() {
+  if (ready) return;
+  await loadStore();
+  ready = true;
+}
 
-createServer(async (req, res) => {
+export async function handleAssociationRequest(req, res, url) {
+  if (!ready) await initializeAssociationService();
+
   try {
-    const url = new URL(req.url || "/", "http://localhost");
-
-    if (url.pathname === "/health") {
-      return json(res, ready ? 200 : 503, {
-        ok: ready,
-        service: SOURCE_NAME,
-        rows: store.rows.length,
-      });
-    }
-
     if (!authorized(req, url)) {
       return json(res, 401, { success: false, error: "unauthorized" });
     }
@@ -100,14 +93,22 @@ createServer(async (req, res) => {
       return json(res, 200, { success: true, row });
     }
 
-    return json(res, 404, { success: false, error: "not_found" });
+    return false;
   } catch (error) {
     console.error("association service request failed:", error);
-    return json(res, 500, { success: false, error: "internal_error" });
+    json(res, 500, { success: false, error: "internal_error" });
+    return true;
   }
-}).listen(PORT, "0.0.0.0", () => {
-  console.info(`Association service listening on port ${PORT} with ${store.rows.length} cached rows.`);
-});
+}
+
+export function getAssociationServiceStats() {
+  return {
+    ready,
+    source: SOURCE_NAME,
+    rows: store.rows.length,
+    storagePath: DATA_PATH,
+  };
+}
 
 function authorized(req, url) {
   if (!API_KEY) return false;
