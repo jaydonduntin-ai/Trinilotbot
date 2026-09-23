@@ -61,6 +61,7 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
       robloxId: userId,
       robloxUsername: username,
       guildId: guildId ?? "",
+      apiKey: process.env.ROBLOX_ASSOCIATION_API_KEY ?? "",
     }).catch((error) => {
       console.warn("Configured Roblox-to-Discord source failed:", error);
       return null;
@@ -160,6 +161,7 @@ export async function lookupDiscordToRoblox({ query, guildId = null }) {
       discordId: discordId ?? "",
       discordUsername: query,
       guildId: guildId ?? "",
+      apiKey: process.env.ROBLOX_ASSOCIATION_API_KEY ?? "",
     }).catch((error) => {
       console.warn("Configured Discord-to-Roblox source failed:", error);
       return null;
@@ -384,6 +386,9 @@ async function fetchJson(url, extraHeaders = {}) {
 }
 
 function normalizeRobloxToDiscord(payload, requested) {
+  const rowResult = normalizeAssociationRowsToDiscord(payload, requested);
+  if (rowResult) return rowResult;
+
   if (payload?.verified !== true || !payload.discord) {
     return null;
   }
@@ -415,6 +420,7 @@ function normalizeRobloxToDiscord(payload, requested) {
     verified: true,
     source: getAssociationSourceName(),
     discordId,
+    discordIds: discordId ? [discordId] : [],
     discordUsername,
     discordGlobalName: toOptionalString(payload.discord.globalName),
     evidenceUrl: toOptionalString(payload.evidenceUrl),
@@ -422,6 +428,12 @@ function normalizeRobloxToDiscord(payload, requested) {
 }
 
 function normalizeDiscordToRoblox(payload, requestedQuery) {
+  const rowResult = normalizeAssociationRowsToRoblox(
+    payload,
+    requestedQuery,
+  );
+  if (rowResult) return rowResult;
+
   if (payload?.verified !== true || !payload.roblox) {
     return null;
   }
@@ -460,6 +472,196 @@ function normalizeDiscordToRoblox(payload, requestedQuery) {
   };
 }
 
+function normalizeAssociationRowsToDiscord(payload, requested) {
+  if (
+    payload?.success !== true ||
+    payload?.found !== true ||
+    !Array.isArray(payload?.results)
+  ) {
+    return null;
+  }
+
+  const requestedId = String(requested?.userId ?? "").trim();
+  const requestedUsername = String(requested?.username ?? "")
+    .trim()
+    .toLowerCase();
+
+  const rows = payload.results.filter((row) => {
+    const rowRobloxId = toOptionalString(
+      row?.roblox_id ?? row?.robloxId ?? row?.robloxID,
+    );
+    const rowUsername = toOptionalString(
+      row?.roblox_username ??
+        row?.robloxUsername ??
+        row?.username,
+    );
+
+    if (requestedId && rowRobloxId && rowRobloxId !== requestedId) {
+      return false;
+    }
+    if (
+      requestedUsername &&
+      rowUsername &&
+      rowUsername.toLowerCase() !== requestedUsername
+    ) {
+      return false;
+    }
+    return Boolean(
+      toOptionalString(row?.discord_id ?? row?.discordId ?? row?.discordID),
+    );
+  });
+
+  const discordIds = [
+    ...new Set(
+      rows
+        .map((row) =>
+          toOptionalString(
+            row?.discord_id ?? row?.discordId ?? row?.discordID,
+          ),
+        )
+        .filter(Boolean),
+    ),
+  ];
+  if (discordIds.length === 0) return null;
+
+  const rowSources = [
+    ...new Set(
+      rows
+        .map((row) => toOptionalString(row?.source))
+        .filter(Boolean)
+        .map(formatProviderSource),
+    ),
+  ];
+
+  return {
+    verified: true,
+    source:
+      rowSources.length > 0
+        ? getAssociationSourceName() + " (" + rowSources.join(" + ") + ")"
+        : getAssociationSourceName(),
+    discordId: discordIds[0],
+    discordIds,
+    discordUsername:
+      rows
+        .map((row) =>
+          toOptionalString(
+            row?.discord_username ??
+              row?.discordUsername ??
+              row?.discord_name,
+          ),
+        )
+        .find(Boolean) ?? null,
+    discordGlobalName:
+      rows
+        .map((row) =>
+          toOptionalString(
+            row?.discord_global_name ?? row?.discordGlobalName,
+          ),
+        )
+        .find(Boolean) ?? null,
+    evidenceUrl: toOptionalString(payload?.evidenceUrl),
+    cachedAt:
+      rows
+        .map((row) => toOptionalString(row?.cached_at ?? row?.cachedAt))
+        .find(Boolean) ?? null,
+  };
+}
+
+function normalizeAssociationRowsToRoblox(payload, requestedQuery) {
+  if (
+    payload?.success !== true ||
+    payload?.found !== true ||
+    !Array.isArray(payload?.results)
+  ) {
+    return null;
+  }
+
+  const requestedId = /^\d+$/.test(requestedQuery)
+    ? requestedQuery
+    : null;
+  const requestedUsername = requestedId
+    ? null
+    : requestedQuery.toLowerCase();
+
+  const rows = payload.results.filter((row) => {
+    const rowDiscordId = toOptionalString(
+      row?.discord_id ?? row?.discordId ?? row?.discordID,
+    );
+    const rowDiscordUsername = toOptionalString(
+      row?.discord_username ??
+        row?.discordUsername ??
+        row?.discord_name,
+    );
+
+    if (requestedId) return rowDiscordId === requestedId;
+    if (!rowDiscordUsername) return false;
+    return rowDiscordUsername.toLowerCase() === requestedUsername;
+  });
+
+  if (rows.length === 0) return null;
+
+  const robloxIds = [
+    ...new Set(
+      rows
+        .map((row) =>
+          toOptionalString(
+            row?.roblox_id ?? row?.robloxId ?? row?.robloxID,
+          ),
+        )
+        .filter(Boolean),
+    ),
+  ];
+  const robloxUsernames = [
+    ...new Set(
+      rows
+        .map((row) =>
+          toOptionalString(
+            row?.roblox_username ??
+              row?.robloxUsername ??
+              row?.username,
+          ),
+        )
+        .filter(Boolean),
+    ),
+  ];
+  if (robloxIds.length === 0 && robloxUsernames.length === 0) {
+    return null;
+  }
+
+  const rowSources = [
+    ...new Set(
+      rows
+        .map((row) => toOptionalString(row?.source))
+        .filter(Boolean)
+        .map(formatProviderSource),
+    ),
+  ];
+
+  return {
+    verified: true,
+    source:
+      rowSources.length > 0
+        ? getAssociationSourceName() + " (" + rowSources.join(" + ") + ")"
+        : getAssociationSourceName(),
+    robloxId: robloxIds[0] ?? null,
+    robloxIds,
+    robloxUsername: robloxUsernames[0] ?? null,
+    robloxUsernames,
+    evidenceUrl: toOptionalString(payload?.evidenceUrl),
+    cachedAt:
+      rows
+        .map((row) => toOptionalString(row?.cached_at ?? row?.cachedAt))
+        .find(Boolean) ?? null,
+  };
+}
+
+function formatProviderSource(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "bloxlink") return "Bloxlink";
+  if (normalized === "rover") return "RoVer";
+  return String(value ?? "").trim();
+}
+
 function reconcileAssociations(results, target) {
   if (!Array.isArray(results) || results.length === 0) return null;
 
@@ -495,17 +697,35 @@ function reconcileAssociations(results, target) {
   }
 
   const ids = [
-    ...new Set(valid.map((item) => item.robloxId).filter(Boolean).map(String)),
+    ...new Set(
+      valid.flatMap((item) =>
+        item.robloxIds?.length
+          ? item.robloxIds.map(String)
+          : item.robloxId
+            ? [String(item.robloxId)]
+            : [],
+      ),
+    ),
   ];
   const usernames = [
-    ...new Set(valid.map((item) => item.robloxUsername).filter(Boolean)),
+    ...new Set(
+      valid.flatMap((item) =>
+        item.robloxUsernames?.length
+          ? item.robloxUsernames
+          : item.robloxUsername
+            ? [item.robloxUsername]
+            : [],
+      ),
+    ),
   ];
 
   return {
     verified: true,
     source: [...new Set(valid.map((item) => item.source))].join(" + "),
     robloxId: ids[0] ?? null,
+    robloxIds: ids,
     robloxUsername: usernames[0] ?? null,
+    robloxUsernames: usernames,
     evidenceUrl:
       valid.map((item) => item.evidenceUrl).find(Boolean) ?? null,
     corroborated: valid.length > 1,
