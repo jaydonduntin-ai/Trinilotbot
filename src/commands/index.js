@@ -8,6 +8,7 @@ import { rbx2admCommand } from "./game-targets.js";
 import { robloxCommand } from "./roblox.js";
 import { devCommand } from "./dev.js";
 import { targetsCommand } from "./targets.js";
+import { ingameCommand } from "./ingame.js";
 
 export const commandModules = [
   pingCommand,
@@ -20,4 +21,5 @@ export const commandModules = [
   alertsCommand,
   devCommand,
   targetsCommand,
+  ingameCommand,
 ];
