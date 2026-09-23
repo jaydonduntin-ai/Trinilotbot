@@ -15,6 +15,7 @@ test("all slash commands are registered", () => {
     "alerts",
     "dev",
     "target",
+    "ingame",
   ]);
 
   for (const command of commandModules) {
