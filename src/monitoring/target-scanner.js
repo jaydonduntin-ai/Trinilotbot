@@ -2343,8 +2343,7 @@ async function buildMm2ValueTargetPlayer(
     id: userId,
     username: user.name ?? "Unavailable",
     displayName: user.displayName ?? "Unavailable",
-    avatarUrl:
-      avatarResult.status === "fulfilled" ? avatarResult.value : null,
+    avatarUrl,
     profileUrl: `https://www.roblox.com/users/${userId}/profile`,
     rolimonsUrl: getRolimonsProfileUrl(userId),
     presenceStatus: "In game",
@@ -5397,6 +5396,25 @@ function nextSearchTerms(count) {
   return terms;
 }
 
+async function resolveTargetIdentity(userId) {
+  const [userResult, avatarResult] = await Promise.allSettled([
+    getRobloxUserById(userId),
+    getAvatarThumbnail(userId),
+  ]);
+
+  const user =
+    userResult.status === "fulfilled" && userResult.value
+      ? userResult.value
+      : null;
+  const avatarUrl =
+    avatarResult.status === "fulfilled" ? avatarResult.value : null;
+
+  return {
+    user,
+    avatarUrl,
+  };
+}
+
 async function buildDiscoveredTargetPlayer(
   presence,
   {
@@ -5424,19 +5442,14 @@ async function buildDiscoveredTargetPlayer(
     Date.now() - Number(candidate.lastKnownRapAt) <= trustedRapTtlMs;
 
   if (hasFreshTrustedRap) {
-    const [userResult, avatarResult] = await Promise.allSettled([
-      getRobloxUserById(userId),
-      getAvatarThumbnail(userId),
-    ]);
-
-    const user =
-      userResult.status === "fulfilled" && userResult.value
-        ? userResult.value
-        : {
-            id: userId,
-            name: `user-${userId}`,
-            displayName: `Roblox user ${userId}`,
-          };
+    const { user, avatarUrl } = await resolveTargetIdentity(userId);
+    if (!user) {
+      return {
+        qualifies: false,
+        id: userId,
+        reason: "identity-unavailable",
+      };
+    }
 
     let gameName = presence.lastLocation ?? "Online";
     if (presence.universeId) {
@@ -5454,8 +5467,7 @@ async function buildDiscoveredTargetPlayer(
       id: userId,
       username: user.name ?? "Unavailable",
       displayName: user.displayName ?? "Unavailable",
-      avatarUrl:
-        avatarResult.status === "fulfilled" ? avatarResult.value : null,
+      avatarUrl,
       profileUrl: `https://www.roblox.com/users/${userId}/profile`,
       rolimonsUrl: getRolimonsProfileUrl(userId),
       presenceStatus: getPresenceStatus(presence.userPresenceType),
@@ -5475,22 +5487,27 @@ async function buildDiscoveredTargetPlayer(
     };
   }
 
-  const [userResult, avatarResult, inventoryResult, rolimonsResult] =
-    await Promise.allSettled([
-      getRobloxUserById(userId),
-      getAvatarThumbnail(userId),
-      getInventorySummary(userId),
-      getRolimonsPlayerSource(userId),
+  const [identity, inventoryResult, rolimonsResult] =
+    await Promise.all([
+      resolveTargetIdentity(userId),
+      Promise.resolve(getInventorySummary(userId)).then(
+        (value) => ({ status: "fulfilled", value }),
+        (reason) => ({ status: "rejected", reason }),
+      ),
+      Promise.resolve(getRolimonsPlayerSource(userId)).then(
+        (value) => ({ status: "fulfilled", value }),
+        (reason) => ({ status: "rejected", reason }),
+      ),
     ]);
 
-  const user =
-    userResult.status === "fulfilled" && userResult.value
-      ? userResult.value
-      : {
-          id: userId,
-          name: `user-${userId}`,
-          displayName: `Roblox user ${userId}`,
-        };
+  const { user, avatarUrl } = identity;
+  if (!user) {
+    return {
+      qualifies: false,
+      id: userId,
+      reason: "identity-unavailable",
+    };
+  }
 
   let inventory =
     inventoryResult.status === "fulfilled" ? inventoryResult.value : null;
