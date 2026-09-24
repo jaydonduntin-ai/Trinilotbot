@@ -12,7 +12,6 @@ import { addScanPlayers } from "../storage/scan-watchlist.js";
 
 const TARGET_DEFAULT_LIMIT = 50;
 const TARGET_EXPANSION_LIMIT = 50;
-const TARGET_MAX_RAP = 2_800_000;
 
 export const targetsCommand = {
   definition: new SlashCommandBuilder()
@@ -98,10 +97,7 @@ export const targetsCommand = {
         limit,
       });
       result.players = (result.players ?? []).filter(
-        (player) =>
-          Boolean(player?.priorityGameKey) &&
-          Number.isFinite(Number(player?.rapValue)) &&
-          Number(player.rapValue) <= TARGET_MAX_RAP,
+        (player) => Boolean(player?.priorityGameKey),
       );
       result.expansion = expansion;
       result.requestedLimit = limit;
@@ -161,7 +157,6 @@ function buildTargetEmbeds(result) {
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
         `Requested: ${result.requestedLimit ?? result.players.length} · Returned: ${result.players.length}`,
         formatPriorityGameSummary(result.players),
-        `RAP range: ${Number(result.minimumRap ?? DEFAULT_TARGET_RAP).toLocaleString()}–${TARGET_MAX_RAP.toLocaleString()}`,
         `Public-joinable returned: ${result.joinReadyCount ?? 0} · Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
         `Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.expansion?.failed
@@ -189,7 +184,7 @@ function buildTargetEmbeds(result) {
       inline: false,
     })
     .setFooter({
-      text: "/target only returns priority-game users with RAP at or below 2.8M and requires a public joinable server.",
+      text: "/target only returns the configured priority games and requires a public joinable server before display.",
     })
     .setTimestamp();
 
