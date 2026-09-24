@@ -67,7 +67,7 @@ export const DEFAULT_MM2_RAP = 2_000;
 export const DEFAULT_TARGET_COUNT = 10;
 export const MAX_TARGETS = 50;
 export const MIN_TARGET_THRESHOLD = 2_000;
-export const MAX_TARGET_THRESHOLD = 2_500_000;
+export const MAX_TARGET_THRESHOLD = 2_800_000;
 
 const GAME_TARGETS = {
   mm2: {
@@ -75,28 +75,40 @@ const GAME_TARGETS = {
     universeId: 66654135,
     matches: ["murder mystery 2", "mm2"],
   },
-  "adopt-me": {
-    label: "Adopt Me",
-    universeId: 383310974,
-    matches: ["adopt me"],
-  },
   "blade-ball": {
     label: "Blade Ball",
     universeId: 4777817887,
-    matches: ["blade ball"],
+    matches: ["blade ball", "bb"],
   },
   ps99: {
     label: "Pet Simulator 99",
     universeId: 3317771874,
     matches: ["pet simulator 99", "pet sim 99", "ps99"],
   },
+  sab: {
+    label: "Steal a Brainrot",
+    universeId: null,
+    matches: ["steal a brainrot", "brainrot", "sab"],
+  },
+  "adopt-me": {
+    label: "Adopt Me",
+    universeId: 383310974,
+    matches: ["adopt me"],
+  },
+  jailbreak: {
+    label: "Jailbreak",
+    universeId: null,
+    matches: ["jailbreak"],
+  },
 };
 
 const PRIORITY_GAME_KEYS = [
   "mm2",
-  "adopt-me",
   "blade-ball",
   "ps99",
+  "sab",
+  "adopt-me",
+  "jailbreak",
 ];
 
 const DEFAULT_MAX_CANDIDATES = 500;
