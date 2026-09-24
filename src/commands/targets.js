@@ -61,32 +61,35 @@ export const targetsCommand = {
         totalWatchlist: 0,
       };
 
-      try {
-        const scanResult = await scanCandidatesForWatchlist({
-          minimumValue,
-          minimumRap,
-          limit: TARGET_EXPANSION_LIMIT,
-          deepScan: false,
-        });
-        const stored = await addScanPlayers(
-          scanResult.players,
-          interaction.channelId,
-        );
-        expansion = {
-          ...expansion,
-          checkedCount: scanResult.checkedCount,
-          qualifyingCount: scanResult.players.length,
-          newlyAdded: stored.added,
-          alreadyWatched: stored.existing,
-          totalWatchlist: stored.total,
-        };
-      } catch (error) {
-        expansion = { ...expansion, failed: true };
-        console.warn(
-          "/target expansion scan failed; continuing with live discovery:",
-          error,
-        );
-      }
+      // Keep /target latency focused on live discovery. Expanding the durable
+      // watchlist is useful, but it can take tens of seconds when candidate
+      // verification hits slow public endpoints. Start it asynchronously so
+      // the current command can return from the verified/live pool first.
+      void (async () => {
+        try {
+          const scanResult = await scanCandidatesForWatchlist({
+            minimumValue,
+            minimumRap,
+            limit: TARGET_EXPANSION_LIMIT,
+            deepScan: false,
+          });
+          const stored = await addScanPlayers(
+            scanResult.players,
+            interaction.channelId,
+          );
+          console.info(
+            `/target background expansion: ${scanResult.checkedCount} checked · ${scanResult.players.length} qualified · ${stored.added} newly watched.`,
+          );
+        } catch (error) {
+          console.warn("/target background expansion failed:", error);
+        }
+      })();
+
+      expansion = {
+        ...expansion,
+        attempted: true,
+        deferred: true,
+      };
 
       const result = await scanDiscoveredTargets({
         minimumValue,
@@ -156,9 +159,11 @@ function buildTargetEmbeds(result) {
         `Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.expansion?.failed
           ? "Expansion scan: unavailable · live discovery continued"
-          : result.expansion?.attempted
-            ? `Expansion scan: ${result.expansion.checkedCount} checked · ${result.expansion.qualifyingCount} qualified · ${result.expansion.newlyAdded} newly watched`
-            : null,
+          : result.expansion?.deferred
+            ? "Expansion scan: running in background for the next /target"
+            : result.expansion?.attempted
+              ? `Expansion scan: ${result.expansion.checkedCount} checked · ${result.expansion.qualifyingCount} qualified · ${result.expansion.newlyAdded} newly watched`
+              : null,
         result.minimumValue !== null && result.minimumValue !== undefined
           ? `Value threshold: ${result.minimumValue.toLocaleString()}`
           : null,
