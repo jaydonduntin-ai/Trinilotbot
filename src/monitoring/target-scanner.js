@@ -6070,12 +6070,18 @@ async function revalidateCurrentlyInGame(players) {
     publicJoinability.players,
   );
 
+  // Never surface a target unless the current JobId has actually been
+  // confirmed in Roblox's public-server list. If public-server verification
+  // is rate-limited or inconclusive, omit the target instead of exposing a
+  // join link that can lead to "not publicly joinable" / Error 524.
   if (
     check.rateLimited === true &&
     joinablePlayers.length === 0 &&
     confirmedPlayers.length > 0
   ) {
-    joinablePlayers = sortTargetPlayersForPriority(confirmedPlayers);
+    console.warn(
+      `Final joinability verification was rate-limited; suppressing ${confirmedPlayers.length} unconfirmed target(s).`,
+    );
   }
 
   return {
