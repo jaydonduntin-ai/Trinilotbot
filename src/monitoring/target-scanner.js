@@ -161,6 +161,7 @@ const SEARCH_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const DEFAULT_ROLIMONS_LEADERBOARD_PAGES_PER_REFRESH = 20;
 const DEFAULT_TARGET_LIVE_CACHE_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_TARGET_LIVE_CACHE_TTL_MS = 8 * 60 * 1000;
+const DEFAULT_TARGET_LIVE_CACHE_BACKOFF_TTL_MS = 20 * 60 * 1000;
 const DEFAULT_TARGET_LIVE_CACHE_SCAN_LIMIT = 500;
 const DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS = 5_000;
 const DEFAULT_TARGET_LIVE_CACHE_BACKOFF_MS = 10 * 60 * 1000;
@@ -593,6 +594,13 @@ export async function refreshTargetLiveCache() {
     "ROBLOX_TARGET_LIVE_CACHE_TTL_MS",
     DEFAULT_TARGET_LIVE_CACHE_TTL_MS,
   );
+  const backoffTtlMs = Math.max(
+    ttlMs,
+    getPositiveIntegerEnv(
+      "ROBLOX_TARGET_LIVE_CACHE_BACKOFF_TTL_MS",
+      DEFAULT_TARGET_LIVE_CACHE_BACKOFF_TTL_MS,
+    ),
+  );
 
   const verifiedCandidates = [...candidatePool.values()]
     .filter(
@@ -674,6 +682,8 @@ export async function refreshTargetLiveCache() {
       DEFAULT_TARGET_LIVE_CACHE_BATCH_DELAY_MS,
     ),
     priority: "background",
+    fallbackFetcher: getUsersPresenceFallback,
+    fallbackOnRateLimit: true,
   });
   const checked = new Set(presenceScan.checkedIds.map(Number));
   const presenceById = new Map(
@@ -712,7 +722,10 @@ export async function refreshTargetLiveCache() {
     liveCacheBackoffUntil = 0;
   }
 
-  pruneLiveTargetCache(now, ttlMs);
+  const degradedRefresh =
+    presenceScan.rateLimited === true ||
+    checked.size < selectedIds.length;
+  pruneLiveTargetCache(now, degradedRefresh ? backoffTtlMs : ttlMs);
   lastLiveCacheRefreshAt = now;
 
   return {
@@ -5290,6 +5303,7 @@ async function refreshLimitedOwnerCandidates(tradeAdItemIds = []) {
                   DEFAULT_LIMITED_OWNER_BACKOFF_MS,
                 ),
             );
+            lastLimitedOwnerRefreshAt = limitedOwnerBackoffUntil;
             console.warn(
               "Roblox limited-owner endpoint rate-limited; stopping this owner sweep and entering backoff.",
             );
