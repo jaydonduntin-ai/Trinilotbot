@@ -17,10 +17,12 @@ export const dc2rbCommand = {
     const discordUser = interaction.options
       .getString("discord_user", true)
       .trim();
+    const resolved = await resolveDiscordIdentity(interaction, discordUser);
+    const lookupQuery = resolved?.id ?? discordUser;
     let association = null;
     try {
       const lookup = await lookupDiscordToRoblox({
-        query: discordUser,
+        query: lookupQuery,
         guildId: interaction.guildId,
       });
       association = lookup?.association ?? null;
@@ -31,7 +33,10 @@ export const dc2rbCommand = {
 
     await interaction.reply({
       content: [
-        `**Discord user:** ${discordUser}`,
+        `**Discord user:** ${resolved?.label ?? discordUser}`,
+        resolved?.id && resolved.id !== discordUser
+          ? `**Resolved Discord ID:** \`${resolved.id}\``
+          : null,
         `**Roblox username or user ID:** ${
           association?.robloxUsername ?? association?.robloxId ?? "Unavailable"
         }`,
@@ -66,4 +71,65 @@ function formatProviderDiagnostics(diagnostics) {
       return `${entry?.provider ?? "Unknown"}: ${entry?.status ?? "unknown"}${detail}`;
     })
     .join(" · ");
+}
+
+
+async function resolveDiscordIdentity(interaction, input) {
+  const mention = input.match(/^<@!?(\d+)>$/);
+  if (mention) {
+    return { id: mention[1], label: input };
+  }
+  if (/^\d+$/.test(input)) {
+    return { id: input, label: input };
+  }
+
+  const guild = interaction.guild;
+  if (!guild) return null;
+
+  const needle = input.toLowerCase();
+  const cached = [...guild.members.cache.values()].filter((member) => {
+    const user = member.user;
+    return [
+      user?.username,
+      user?.globalName,
+      member.displayName,
+      user?.tag,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase() === needle);
+  });
+
+  if (cached.length === 1) {
+    const member = cached[0];
+    return {
+      id: member.id,
+      label: member.user?.tag ?? member.user?.username ?? member.displayName ?? input,
+    };
+  }
+
+  try {
+    const fetched = await guild.members.fetch({ query: input, limit: 10 });
+    const exact = [...fetched.values()].filter((member) => {
+      const user = member.user;
+      return [
+        user?.username,
+        user?.globalName,
+        member.displayName,
+        user?.tag,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase() === needle);
+    });
+    if (exact.length === 1) {
+      const member = exact[0];
+      return {
+        id: member.id,
+        label: member.user?.tag ?? member.user?.username ?? member.displayName ?? input,
+      };
+    }
+  } catch (error) {
+    console.warn("Could not resolve Discord member for /dc2rb:", error);
+  }
+
+  return null;
 }
