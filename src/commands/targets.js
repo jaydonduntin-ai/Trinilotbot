@@ -1,4 +1,4 @@
-import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_COUNT,
   DEFAULT_TARGET_RAP,
@@ -48,7 +48,7 @@ export const targetsCommand = {
     const minimumValue = null;
     const minimumRap = minimumRapOption ?? DEFAULT_TARGET_RAP;
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.deferReply();
 
     try {
       let expansion = {
@@ -124,7 +124,6 @@ export const targetsCommand = {
       for (const batch of embedBatches.slice(1)) {
         await interaction.followUp({
           embeds: batch,
-          flags: MessageFlags.Ephemeral,
         });
       }
     } catch (error) {
