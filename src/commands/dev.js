@@ -1,4 +1,4 @@
-import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_TARGET_VALUE,
   MAX_TARGETS,
@@ -50,7 +50,7 @@ export const devCommand = {
       interaction.options.getInteger("min_rap") ?? DEV_DEFAULT_RAP;
     const limit = interaction.options.getInteger("limit") ?? MAX_TARGETS;
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.deferReply();
 
     try {
       const result = await scanDeveloperTargets({
@@ -99,7 +99,6 @@ export const devCommand = {
       for (let index = 10; index < embeds.length; index += 10) {
         await interaction.followUp({
           embeds: embeds.slice(index, index + 10),
-          flags: MessageFlags.Ephemeral,
         });
       }
     } catch (error) {
