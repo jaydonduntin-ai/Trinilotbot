@@ -113,10 +113,10 @@ const PRIORITY_GAME_KEYS = [
 
 const DEFAULT_MAX_CANDIDATES = 500;
 const DEFAULT_TARGET_MAX_PRESENCE_CANDIDATES = 2_500;
-const DEFAULT_TARGET_SCAN_WAVE_SIZE = 250;
-const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 90_000;
+const DEFAULT_TARGET_SCAN_WAVE_SIZE = 150;
+const DEFAULT_TARGET_SCAN_TIME_BUDGET_MS = 25_000;
 const DEFAULT_TRUSTED_RAP_TTL_MS = 15 * 60 * 1000;
-const FINAL_RECHECK_BATCH_SIZE = 10;
+const FINAL_RECHECK_BATCH_SIZE = 25;
 const PUBLIC_SERVER_VERIFY_CONCURRENCY = 1;
 const DEFAULT_PUBLIC_SERVER_VERIFY_MAX_PAGES = 10;
 const DEFAULT_PUBLIC_SERVER_VERIFY_INTER_GROUP_DELAY_MS = 750;
@@ -1041,8 +1041,8 @@ async function scanDiscoveredTargetsInternal({
   // interactive request, while leaving the background live cache at its
   // conservative 150-user cycle.
   const maxPresenceCandidates = Math.min(
-    2_500,
-    Math.max(configuredPresenceCandidates, requestedLimit * 40),
+    900,
+    Math.max(configuredPresenceCandidates, requestedLimit * 16),
   );
   const waveSize = Math.max(
     50,
@@ -1133,7 +1133,7 @@ async function scanDiscoveredTargetsInternal({
 
     const presenceScan = await getPresenceBatched(wave, {
       maxAttempts: 1,
-      interBatchDelayMs: 1_000,
+      interBatchDelayMs: 200,
       stopOnRateLimit: true,
       presenceFetcher: route.presenceFetcher,
       fallbackFetcher: route.fallbackFetcher,
@@ -2378,7 +2378,7 @@ async function revalidatePlayersForGame(players, game) {
 
   const liveCheck = await getPresenceBatched(userIds, {
     maxAttempts: 1,
-    interBatchDelayMs: 500,
+    interBatchDelayMs: 150,
     stopOnRateLimit: true,
     presenceFetcher: route.presenceFetcher,
     fallbackFetcher: route.fallbackFetcher,
