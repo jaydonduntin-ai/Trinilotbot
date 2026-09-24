@@ -67,7 +67,7 @@ export const DEFAULT_MM2_RAP = 2_000;
 export const DEFAULT_TARGET_COUNT = 10;
 export const MAX_TARGETS = 50;
 export const MIN_TARGET_THRESHOLD = 2_000;
-export const MAX_TARGET_THRESHOLD = 2_800_000;
+export const MAX_TARGET_THRESHOLD = 2_500_000;
 
 const GAME_TARGETS = {
   mm2: {
