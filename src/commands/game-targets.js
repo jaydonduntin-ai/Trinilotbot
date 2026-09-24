@@ -1,4 +1,4 @@
-import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_MM2_VALUE,
   DEFAULT_TARGET_COUNT,
@@ -91,7 +91,7 @@ function createGameTargetCommand({
         interaction.options.getInteger("limit") ??
         (gameKey === "adopt-me" ? MAX_TARGETS : DEFAULT_TARGET_COUNT);
 
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.deferReply();
 
       try {
         const result =
