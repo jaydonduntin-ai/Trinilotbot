@@ -17,7 +17,7 @@ export const targetsCommand = {
   definition: new SlashCommandBuilder()
     .setName("target")
     .setDescription(
-      "Expand the candidate pool, then return currently in-game RAP targets.",
+      "Find high-RAP users currently active in the priority Roblox games.",
     )
     .addIntegerOption((option) =>
       option
@@ -96,6 +96,9 @@ export const targetsCommand = {
         minimumRap,
         limit,
       });
+      result.players = (result.players ?? []).filter(
+        (player) => Boolean(player?.priorityGameKey),
+      );
       result.expansion = expansion;
       result.requestedLimit = limit;
 
@@ -181,7 +184,7 @@ function buildTargetEmbeds(result) {
       inline: false,
     })
     .setFooter({
-      text: "/target expands first, then requires fresh presence plus a public JobId before display.",
+      text: "/target only returns the configured priority games and requires a public joinable server before display.",
     })
     .setTimestamp();
 
@@ -276,7 +279,7 @@ function formatPriorityGameSummary(players) {
 
   const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
   if (total === 0) {
-    return "Priority games: 0 returned · all-game discovery stayed open";
+    return "Priority games: 0 returned";
   }
 
   const breakdown = [...counts.entries()]
