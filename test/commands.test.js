@@ -6,6 +6,7 @@ test("all slash commands are registered", () => {
   const names = commandModules.map((command) => command.definition.name);
   assert.deepEqual(names, [
     "rbx2dc",
+    "roblox",
     "target",
     "scan",
     "limitedowners",
