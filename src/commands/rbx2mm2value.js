@@ -1,4 +1,4 @@
-import { MessageFlags, EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
   DEFAULT_MM2_VALUE,
   DEFAULT_TARGET_COUNT,
@@ -39,7 +39,7 @@ export const rbx2mm2ValueCommand = {
     const limit =
       interaction.options.getInteger("limit") ?? DEFAULT_TARGET_COUNT;
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.deferReply();
     await subscribeMm2ValueChannel(interaction.channelId).catch((error) => {
       console.warn("Could not subscribe MM2 value alert channel:", error);
     });
@@ -76,7 +76,6 @@ export const rbx2mm2ValueCommand = {
       for (const batch of batches.slice(1)) {
         await interaction.followUp({
           embeds: batch,
-          flags: MessageFlags.Ephemeral,
         });
       }
     } catch (error) {
