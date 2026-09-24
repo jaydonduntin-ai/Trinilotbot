@@ -1,4 +1,4 @@
-import { MessageFlags, SlashCommandBuilder } from "discord.js";
+import { SlashCommandBuilder } from "discord.js";
 import { lookupDiscordToRoblox } from "../sources/associations.js";
 
 export const dc2rbCommand = {
@@ -52,7 +52,6 @@ export const dc2rbCommand = {
           : null,
         `**Providers checked:** ${formatProviderDiagnostics(providerDiagnostics)}`,
       ].filter(Boolean).join("\n"),
-      flags: MessageFlags.Ephemeral,
     });
   },
 };
