@@ -39,7 +39,7 @@ export const ingameCommand = {
     const username = interaction.options.getString("username", true).trim();
     const gameLabel = GAMES[gameKey];
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.deferReply();
 
     try {
       const user = await lookupRobloxUser(username);
