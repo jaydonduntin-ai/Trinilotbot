@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { commandModules } from "../src/commands/index.js";
 
-test("only rbx2mm2 is registered as a manual slash command", () => {
+test("target and rbx2mm2 are registered as manual slash commands", () => {
   const names = commandModules.map((command) => command.definition.name);
-  assert.deepEqual(names, ["rbx2mm2"]);
+  assert.deepEqual(names, ["target", "rbx2mm2"]);
 
   for (const command of commandModules) {
     const definition = command.definition.toJSON();
