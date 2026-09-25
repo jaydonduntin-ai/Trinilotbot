@@ -181,6 +181,7 @@ const DEFAULT_DEVELOPER_INDEX_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
 const DEFAULT_PRESENCE_API_BACKOFF_MS = 3 * 60 * 1000;
 const DEFAULT_FALLBACK_PRESENCE_BACKOFF_MS = 5 * 60 * 1000;
 const DEFAULT_PRESENCE_TIMEOUT_BACKOFF_MS = 90_000;
+const DEFAULT_PRESENCE_SCHEDULER_SPACING_MS = 3_000;
 const DEFAULT_FALLBACK_TIMEOUT_BACKOFF_MS = 2 * 60 * 1000;
 const GROUP_SEARCH_TERMS_PER_REFRESH = 3;
 const GROUPS_PER_SEARCH_TERM = 2;
@@ -285,6 +286,7 @@ let activeInteractivePresenceScans = 0;
 const presenceInteractiveQueue = [];
 const presenceBackgroundQueue = [];
 let presenceSchedulerRunning = false;
+let lastPresenceSchedulerRequestAt = 0;
 
 async function ensureTargetHistoryHydrated() {
   if (targetHistoryHydrated) return;
@@ -6268,8 +6270,19 @@ async function pumpPresenceScheduler() {
         presenceBackgroundQueue.shift();
 
       try {
-        job.resolve(await job.task());
+        const spacingMs = getPositiveIntegerEnv(
+          "ROBLOX_PRESENCE_SCHEDULER_SPACING_MS",
+          DEFAULT_PRESENCE_SCHEDULER_SPACING_MS,
+        );
+        const elapsedMs = Date.now() - lastPresenceSchedulerRequestAt;
+        const waitMs = Math.max(0, spacingMs - elapsedMs);
+        if (waitMs > 0) await sleep(waitMs);
+
+        const result = await job.task();
+        lastPresenceSchedulerRequestAt = Date.now();
+        job.resolve(result);
       } catch (error) {
+        lastPresenceSchedulerRequestAt = Date.now();
         job.reject(error);
       }
     }

@@ -28,8 +28,8 @@ export const rbx2mm2Command = {
         content:
           result.players.length > 0
             ? `Found ${result.players.length} public-joinable Murder Mystery 2 player${result.players.length === 1 ? "" : "s"}. No RAP minimum or fixed result-count cap is applied.`
-            : result.presenceRateLimited && !result.presenceFallbackUsed
-              ? "Roblox is rate-limiting live presence checks right now. No verified public-joinable MM2 player was available in this pass."
+            : result.presenceRateLimited
+              ? `Roblox rate-limited this live scan after checking ${Number(result.presenceScannedCount ?? 0).toLocaleString()} candidates. This pass was cut short, so 0 returned does not mean there are no active MM2 players.`
               : "No current public-joinable Murder Mystery 2 player was verified in this pass.",
         embeds: batches[0] ?? [],
       });
