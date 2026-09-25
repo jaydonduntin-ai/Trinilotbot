@@ -479,6 +479,10 @@ export function startTargetCandidatePoolWarmup() {
   if (targetPoolWarmupTimer || targetLiveCacheTimer) return;
 
   const refreshCandidates = async () => {
+    if (activeInteractivePresenceScans > 0) {
+      console.info("Skipping background candidate refresh while /target is active.");
+      return;
+    }
     try {
       const stats = await refreshCandidatePool();
       const populations = stats.sourceCounts ?? {};
@@ -547,7 +551,7 @@ export function startTargetCandidatePoolWarmup() {
 
   const initialFullRefreshTimer = setTimeout(
     refreshCandidates,
-    45_000,
+    10 * 60 * 1000,
   );
   initialFullRefreshTimer.unref?.();
 
