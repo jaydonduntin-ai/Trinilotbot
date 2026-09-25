@@ -1149,9 +1149,7 @@ async function scanDiscoveredTargetsInternal({
 
     const inGamePresences = diversifyPresencesByRap(
       presenceScan.presences.filter(
-        (presence) =>
-          Number(presence?.userPresenceType) === 2 &&
-          Boolean(getPriorityGameKey(presence)),
+        (presence) => Number(presence?.userPresenceType) === 2,
       ),
     );
 
@@ -3747,12 +3745,6 @@ function compareTargetPresences(
   right,
   { minimumValue = null, minimumRap = null } = {},
 ) {
-  const leftPriority = getPriorityGameKey(left) ? 1 : 0;
-  const rightPriority = getPriorityGameKey(right) ? 1 : 0;
-  if (leftPriority !== rightPriority) {
-    return rightPriority - leftPriority;
-  }
-
   return (
     getCandidatePriority(
       candidatePool.get(Number(right?.userId)),
@@ -3796,11 +3788,7 @@ function diversifyPresencesByRap(presences) {
 }
 
 function sortTargetPlayersForPriority(players) {
-  return [...(players ?? [])].sort((left, right) => {
-    const leftPriority = left?.priorityGameKey ? 1 : 0;
-    const rightPriority = right?.priorityGameKey ? 1 : 0;
-    return rightPriority - leftPriority;
-  });
+  return [...(players ?? [])];
 }
 
 function isPresenceForGame(presence, game) {
@@ -5861,18 +5849,9 @@ async function filterPublicJoinablePlayers(players) {
     byPlace.set(placeId, list);
   }
 
-  const groups = [...byPlace.entries()].sort((left, right) => {
-    const rightPriority = right[1].some(
-      (player) => Boolean(player?.priorityGameKey),
-    );
-    const leftPriority = left[1].some(
-      (player) => Boolean(player?.priorityGameKey),
-    );
-    if (rightPriority !== leftPriority) {
-      return Number(rightPriority) - Number(leftPriority);
-    }
-    return right[1].length - left[1].length;
-  });
+  const groups = [...byPlace.entries()].sort(
+    (left, right) => right[1].length - left[1].length,
+  );
 
   const maxPages = getPositiveIntegerEnv(
     "ROBLOX_JOIN_VERIFY_MAX_PAGES",
