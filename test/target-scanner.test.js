@@ -183,3 +183,17 @@ test("target player builder does not reference stale avatarResult", async () => 
     "target player builder should return the resolved avatarUrl",
   );
 });
+
+
+test("target live scan accepts all in-game Roblox presences", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(
+    new URL("../src/monitoring/target-scanner.js", import.meta.url),
+    "utf8",
+  );
+  assert.equal(
+    source.includes("Boolean(getPriorityGameKey(presence))"),
+    false,
+    "interactive /target must not filter live users to the old priority-game list",
+  );
+});
