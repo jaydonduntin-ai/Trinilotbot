@@ -2,15 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { commandModules } from "../src/commands/index.js";
 
-test("all slash commands are registered", () => {
+test("only rbx2mm2 is registered as a manual slash command", () => {
   const names = commandModules.map((command) => command.definition.name);
-  assert.deepEqual(names, [
-    "rbx2dc",
-    "roblox",
-    "target",
-    "scan",
-    "limitedowners",
-  ]);
+  assert.deepEqual(names, ["rbx2mm2"]);
 
   for (const command of commandModules) {
     const definition = command.definition.toJSON();
@@ -20,29 +14,22 @@ test("all slash commands are registered", () => {
   }
 });
 
-
-
-test("/target is RAP-only", () => {
-  const target = commandModules.find(
-    (candidate) => candidate.definition.name === "target",
+test("/rbx2mm2 has no RAP threshold option", () => {
+  const command = commandModules.find(
+    (candidate) => candidate.definition.name === "rbx2mm2",
   );
-  const targetDefinition = target.definition.toJSON();
-  const targetMinRap = targetDefinition.options.find(
+  const definition = command.definition.toJSON();
+  const minRap = definition.options?.find(
     (option) => option.name === "min_rap",
   );
-  const targetMinValue = targetDefinition.options.find(
-    (option) => option.name === "min_value",
-  );
 
-  assert.ok(targetMinRap, "/target should expose min_rap");
-  assert.equal(targetMinRap.min_value, 2000);
-  assert.equal(targetMinValue, undefined);
+  assert.equal(minRap, undefined);
+  assert.match(definition.description, /no RAP minimum/i);
 });
 
-
-test("/target supports up to 50 results and defaults to 50", () => {
+test("/rbx2mm2 supports up to 50 results", () => {
   const command = commandModules.find(
-    (candidate) => candidate.definition.name === "target",
+    (candidate) => candidate.definition.name === "rbx2mm2",
   );
   const definition = command.definition.toJSON();
   const limit = definition.options.find((option) => option.name === "limit");
@@ -51,8 +38,6 @@ test("/target supports up to 50 results and defaults to 50", () => {
   assert.equal(limit.max_value, 50);
   assert.match(limit.description, /default 50, max 50/i);
 });
-
-
 
 test("Discord command and option descriptions stay within 100 characters", () => {
   for (const command of commandModules) {
@@ -71,7 +56,6 @@ test("Discord command and option descriptions stay within 100 characters", () =>
   }
 });
 
-
 test("Discord commands are intended for guild-only use", async () => {
   const { isGuildAllowed } = await import("../src/security/guild-lock.js");
   const allowed = new Set(["123"]);
@@ -79,4 +63,3 @@ test("Discord commands are intended for guild-only use", async () => {
   assert.equal(isGuildAllowed("456", allowed), false);
   assert.equal(isGuildAllowed(null, allowed), false);
 });
-
