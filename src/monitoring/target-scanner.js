@@ -5637,8 +5637,7 @@ async function buildDiscoveredTargetPlayer(
     id: userId,
     username: user.name ?? "Unavailable",
     displayName: user.displayName ?? "Unavailable",
-    avatarUrl:
-      avatarResult.status === "fulfilled" ? avatarResult.value : null,
+    avatarUrl,
     profileUrl: `https://www.roblox.com/users/${userId}/profile`,
     rolimonsUrl: getRolimonsProfileUrl(userId),
     presenceStatus: getPresenceStatus(presence.userPresenceType),
