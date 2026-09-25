@@ -970,6 +970,8 @@ async function scanDiscoveredTargetsInternal({
         buildDiscoveredTargetPlayer(presence, {
           minimumValue,
           minimumRap,
+          includeGameValue: false,
+          preferIndexedRap: true,
         }).catch(() => null),
     );
     const cachedVerified = cachedResults
@@ -1198,6 +1200,8 @@ async function scanDiscoveredTargetsInternal({
           buildDiscoveredTargetPlayer(presence, {
             minimumValue,
             minimumRap,
+            includeGameValue: false,
+            preferIndexedRap: true,
           }).catch((error) => {
             console.warn(
               `Target verification failed for Roblox user ${presence.userId}:`,
@@ -5410,6 +5414,7 @@ async function buildDiscoveredTargetPlayer(
     minimumValue = null,
     minimumRap = null,
     includeGameValue = true,
+    preferIndexedRap = false,
   } = {},
 ) {
   const userId = Number(presence.userId);
@@ -5430,7 +5435,14 @@ async function buildDiscoveredTargetPlayer(
     Number.isFinite(Number(candidate?.lastKnownRapAt)) &&
     Date.now() - Number(candidate.lastKnownRapAt) <= trustedRapTtlMs;
 
-  if (hasFreshTrustedRap) {
+  if (
+    hasFreshTrustedRap ||
+    (preferIndexedRap &&
+      minimumValue === null &&
+      minimumRap !== null &&
+      Number.isFinite(Number(candidate?.lastKnownRap)) &&
+      Number(candidate.lastKnownRap) >= Number(minimumRap))
+  ) {
     const { user, avatarUrl } = await resolveTargetIdentity(userId);
     if (!user) {
       return {
@@ -5441,7 +5453,7 @@ async function buildDiscoveredTargetPlayer(
     }
 
     let gameName = presence.lastLocation ?? "Online";
-    if (presence.universeId) {
+    if ((!presence.lastLocation || presence.lastLocation === "Online") && presence.universeId) {
       try {
         const game = await getGameDetails(presence.universeId);
         gameName = game?.name ?? gameName;
