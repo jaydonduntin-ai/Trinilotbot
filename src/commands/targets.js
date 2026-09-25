@@ -61,30 +61,6 @@ export const targetsCommand = {
         totalWatchlist: 0,
       };
 
-      // Keep /target latency focused on live discovery. Expanding the durable
-      // watchlist is useful, but it can take tens of seconds when candidate
-      // verification hits slow public endpoints. Start it asynchronously so
-      // the current command can return from the verified/live pool first.
-      void (async () => {
-        try {
-          const scanResult = await scanCandidatesForWatchlist({
-            minimumValue,
-            minimumRap,
-            limit: TARGET_EXPANSION_LIMIT,
-            deepScan: false,
-          });
-          const stored = await addScanPlayers(
-            scanResult.players,
-            interaction.channelId,
-          );
-          console.info(
-            `/target background expansion: ${scanResult.checkedCount} checked · ${scanResult.players.length} qualified · ${stored.added} newly watched.`,
-          );
-        } catch (error) {
-          console.warn("/target background expansion failed:", error);
-        }
-      })();
-
       expansion = {
         ...expansion,
         attempted: true,
@@ -129,6 +105,29 @@ export const targetsCommand = {
           embeds: batch,
         });
       }
+
+      // Only expand the durable watchlist after the interactive /target work
+      // has finished. Running both at the same time was competing for Roblox
+      // request capacity and causing avoidable presence/rate-limit failures.
+      void (async () => {
+        try {
+          const scanResult = await scanCandidatesForWatchlist({
+            minimumValue,
+            minimumRap,
+            limit: TARGET_EXPANSION_LIMIT,
+            deepScan: false,
+          });
+          const stored = await addScanPlayers(
+            scanResult.players,
+            interaction.channelId,
+          );
+          console.info(
+            `/target background expansion: ${scanResult.checkedCount} checked · ${scanResult.players.length} qualified · ${stored.added} newly watched.`,
+          );
+        } catch (error) {
+          console.warn("/target background expansion failed:", error);
+        }
+      })();
     } catch (error) {
       console.error("Automatic target discovery failed:", error);
       await interaction.editReply(
