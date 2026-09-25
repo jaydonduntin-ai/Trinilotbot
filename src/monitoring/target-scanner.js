@@ -985,11 +985,15 @@ async function scanDiscoveredTargetsInternal({
       .slice(0, Math.min(MAX_TARGETS, requestedLimit + 2));
     const finalCached = await revalidateCurrentlyInGame(
       cachedVerified,
+      { trustRecentPresence: true },
     );
 
     cachedJoinablePlayers = finalCached.players;
 
-    if (finalCached.players.length >= requestedLimit) {
+    if (
+      finalCached.players.length >= requestedLimit ||
+      !getInteractivePresenceRoute()
+    ) {
       const selectedPlayers = diversifyPlayersByRap(
         sortTargetPlayersForPriority(finalCached.players),
       )
@@ -1049,13 +1053,16 @@ async function scanDiscoveredTargetsInternal({
   // interactive request, while leaving the background live cache at its
   // conservative 150-user cycle.
   const maxPresenceCandidates = Math.min(
-    2_500,
-    Math.max(configuredPresenceCandidates, requestedLimit * 40),
+    300,
+    Math.max(
+      50,
+      Math.min(configuredPresenceCandidates, requestedLimit * 6),
+    ),
   );
   const waveSize = Math.max(
-    50,
+    25,
     Math.min(
-      1_000,
+      100,
       getPositiveIntegerEnv(
         "ROBLOX_TARGET_SCAN_WAVE_SIZE",
         DEFAULT_TARGET_SCAN_WAVE_SIZE,
@@ -1140,8 +1147,9 @@ async function scanDiscoveredTargetsInternal({
     }
 
     const presenceScan = await getPresenceBatched(wave, {
+      batchSize: 25,
       maxAttempts: 1,
-      interBatchDelayMs: 1_000,
+      interBatchDelayMs: 2_500,
       stopOnRateLimit: true,
       presenceFetcher: route.presenceFetcher,
       fallbackFetcher: route.fallbackFetcher,
@@ -5980,7 +5988,9 @@ async function filterPublicJoinablePlayers(players) {
   };
 }
 
-async function revalidateCurrentlyInGame(players) {
+async function revalidateCurrentlyInGame(players, {
+  trustRecentPresence = false,
+} = {}) {
   if (!Array.isArray(players) || players.length === 0) {
     return {
       players: [],
@@ -5996,25 +6006,29 @@ async function revalidateCurrentlyInGame(players) {
 
   const route = getInteractivePresenceRoute();
   if (!route) {
-    const fallbackPlayers = sortTargetPlayersForPriority(
-      (players ?? []).filter(
-        (player) =>
-          Number.isInteger(Number(player?.placeId)) &&
-          Number(player.placeId) > 0 &&
-          String(player?.gameId ?? "").trim(),
-      ),
+    const freshCachedPlayers = trustRecentPresence
+      ? (players ?? []).filter(
+          (player) =>
+            Number.isInteger(Number(player?.placeId)) &&
+            Number(player.placeId) > 0 &&
+            String(player?.gameId ?? "").trim(),
+        )
+      : [];
+
+    const publicJoinability = await filterPublicJoinablePlayers(
+      freshCachedPlayers,
     );
 
     return {
-      players: fallbackPlayers,
+      players: sortTargetPlayersForPriority(publicJoinability.players),
       leftGameCount: 0,
       unavailableCount: userIds.length,
-      nonPublicServerCount:
-        (players ?? []).length - fallbackPlayers.length,
-      publicServerVerificationErrorCount: 0,
+      nonPublicServerCount: publicJoinability.nonPublicServerCount ?? 0,
+      publicServerVerificationErrorCount:
+        publicJoinability.verificationErrorCount ?? 0,
       rateLimited: true,
       usedFallback: false,
-      preservedFreshPresence: true,
+      preservedFreshPresence: trustRecentPresence,
     };
   }
 
