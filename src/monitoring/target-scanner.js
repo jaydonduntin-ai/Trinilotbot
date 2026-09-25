@@ -1149,7 +1149,9 @@ async function scanDiscoveredTargetsInternal({
 
     const inGamePresences = diversifyPresencesByRap(
       presenceScan.presences.filter(
-        (presence) => Number(presence?.userPresenceType) === 2,
+        (presence) =>
+          Number(presence?.userPresenceType) === 2 &&
+          Boolean(getPriorityGameKey(presence)),
       ),
     );
 
