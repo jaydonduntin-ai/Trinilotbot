@@ -5,13 +5,10 @@ import {
   MAX_TARGETS,
   MIN_TARGET_THRESHOLD,
   MAX_TARGET_THRESHOLD,
-  scanCandidatesForWatchlist,
   scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
-import { addScanPlayers } from "../storage/scan-watchlist.js";
 
 const TARGET_DEFAULT_LIMIT = 50;
-const TARGET_EXPANSION_LIMIT = 50;
 
 export const targetsCommand = {
   definition: new SlashCommandBuilder()
@@ -51,29 +48,12 @@ export const targetsCommand = {
     await interaction.deferReply();
 
     try {
-      let expansion = {
-        attempted: true,
-        failed: false,
-        checkedCount: 0,
-        qualifyingCount: 0,
-        newlyAdded: 0,
-        alreadyWatched: 0,
-        totalWatchlist: 0,
-      };
-
-      expansion = {
-        ...expansion,
-        attempted: true,
-        deferred: true,
-      };
-
       const result = await scanDiscoveredTargets({
         minimumValue,
         minimumRap,
         limit,
       });
       result.players = result.players ?? [];
-      result.expansion = expansion;
       result.requestedLimit = limit;
 
       console.info(
@@ -104,28 +84,13 @@ export const targetsCommand = {
         });
       }
 
-      // Only expand the durable watchlist after the interactive /target work
-      // has finished. Running both at the same time was competing for Roblox
-      // request capacity and causing avoidable presence/rate-limit failures.
-      void (async () => {
-        try {
-          const scanResult = await scanCandidatesForWatchlist({
-            minimumValue,
-            minimumRap,
-            limit: TARGET_EXPANSION_LIMIT,
-            deepScan: false,
-          });
-          const stored = await addScanPlayers(
-            scanResult.players,
-            interaction.channelId,
-          );
-          console.info(
-            `/target background expansion: ${scanResult.checkedCount} checked · ${scanResult.players.length} qualified · ${stored.added} newly watched.`,
-          );
-        } catch (error) {
-          console.warn("/target background expansion failed:", error);
-        }
-      })();
+      // Candidate discovery/pool warmup is handled independently in the
+      // background. Do not start a second scan after /target; that competed
+      // for Roblox presence capacity and made the next interactive request
+      // more likely to hit rate limits.
+      console.info(
+        "/target completed without post-command expansion; background candidate pool remains independent.",
+      );
     } catch (error) {
       console.error("Automatic target discovery failed:", error);
       await interaction.editReply(
@@ -156,13 +121,6 @@ function buildTargetEmbeds(result) {
         formatGameCoverageSummary(result.players),
         `Public-joinable returned: ${result.joinReadyCount ?? 0} · Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
         `Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
-        result.expansion?.failed
-          ? "Expansion scan: unavailable · live discovery continued"
-          : result.expansion?.deferred
-            ? "Expansion scan: running in background for the next /target"
-            : result.expansion?.attempted
-              ? `Expansion scan: ${result.expansion.checkedCount} checked · ${result.expansion.qualifyingCount} qualified · ${result.expansion.newlyAdded} newly watched`
-              : null,
         result.minimumValue !== null && result.minimumValue !== undefined
           ? `Value threshold: ${result.minimumValue.toLocaleString()}`
           : null,
