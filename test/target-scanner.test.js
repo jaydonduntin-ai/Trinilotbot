@@ -160,3 +160,26 @@ test("verified player join helper builds click-time verification URL", async () 
     }
   }
 });
+
+
+test("target player builder does not reference stale avatarResult", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(
+    new URL("../src/monitoring/target-scanner.js", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf("async function buildDiscoveredTargetPlayer");
+  const end = source.indexOf("function buildTargetJoinability", start);
+  assert.ok(start >= 0 && end > start, "target player builder should exist");
+  const builder = source.slice(start, end);
+  assert.equal(
+    builder.includes("avatarResult"),
+    false,
+    "target player builder must use resolved avatarUrl instead of stale avatarResult",
+  );
+  assert.equal(
+    builder.includes("avatarUrl,"),
+    true,
+    "target player builder should return the resolved avatarUrl",
+  );
+});
