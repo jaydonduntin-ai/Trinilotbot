@@ -17,7 +17,7 @@ export const targetsCommand = {
   definition: new SlashCommandBuilder()
     .setName("target")
     .setDescription(
-      "Find high-RAP users currently active in the priority Roblox games.",
+      "Find high-RAP users currently active in any Roblox game.",
     )
     .addIntegerOption((option) =>
       option
@@ -72,9 +72,7 @@ export const targetsCommand = {
         minimumRap,
         limit,
       });
-      result.players = (result.players ?? []).filter(
-        (player) => Boolean(player?.priorityGameKey),
-      );
+      result.players = result.players ?? [];
       result.expansion = expansion;
       result.requestedLimit = limit;
 
@@ -155,7 +153,7 @@ function buildTargetEmbeds(result) {
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
         `Requested: ${result.requestedLimit ?? result.players.length} · Returned: ${result.players.length}`,
-        formatPriorityGameSummary(result.players),
+        formatGameCoverageSummary(result.players),
         `Public-joinable returned: ${result.joinReadyCount ?? 0} · Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
         `Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
         result.expansion?.failed
@@ -183,7 +181,7 @@ function buildTargetEmbeds(result) {
       inline: false,
     })
     .setFooter({
-      text: "/target only returns the configured priority games and requires a public joinable server before display.",
+      text: "/target searches all Roblox games and requires a public joinable server before display.",
     })
     .setTimestamp();
 
@@ -268,23 +266,22 @@ function formatTargetJoin(player) {
   ].filter(Boolean).join("\n");
 }
 
-function formatPriorityGameSummary(players) {
+function formatGameCoverageSummary(players) {
   const counts = new Map();
   for (const player of players ?? []) {
-    const label = player?.priorityGameLabel;
-    if (!label) continue;
+    const label = player?.gameName ?? "Unknown game";
     counts.set(label, (counts.get(label) ?? 0) + 1);
   }
 
-  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-  if (total === 0) {
-    return "Priority games: 0 returned";
+  if (counts.size === 0) {
+    return "Games: 0 returned";
   }
 
   const breakdown = [...counts.entries()]
+    .slice(0, 8)
     .map(([label, count]) => `${label} ${count}`)
     .join(" · ");
-  return `Priority games: ${total} returned · ${breakdown}`;
+  return `Games: ${players.length} returned · ${breakdown}`;
 }
 
 function formatThresholds(result) {
