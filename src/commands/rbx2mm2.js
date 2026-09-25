@@ -1,27 +1,14 @@
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
-  DEFAULT_MM2_RAP,
   MAX_TARGETS,
-  MAX_TARGET_THRESHOLD,
   scanMm2RapActivity,
 } from "../monitoring/target-scanner.js";
-
-const MIN_MM2_RAP = 2_000;
 
 export const rbx2mm2Command = {
   definition: new SlashCommandBuilder()
     .setName("rbx2mm2")
     .setDescription(
-      "Find up to 50 public-joinable 2K+ RAP users currently playing Murder Mystery 2.",
-    )
-    .addIntegerOption((option) =>
-      option
-        .setName("min_rap")
-        .setDescription(
-          `Minimum Roblox RAP; default 2,000.`,
-        )
-        .setMinValue(MIN_MM2_RAP)
-        .setMaxValue(MAX_TARGET_THRESHOLD),
+      "Find up to 50 public-joinable users currently playing Murder Mystery 2. No RAP minimum.",
     )
     .addIntegerOption((option) =>
       option
@@ -34,19 +21,17 @@ export const rbx2mm2Command = {
     ),
 
   async execute(interaction) {
-    const minimumRap =
-      interaction.options.getInteger("min_rap") ?? 2_000;
     const limit =
       interaction.options.getInteger("limit") ?? MAX_TARGETS;
 
     await interaction.deferReply();
     await interaction.editReply(
-      `Scanning MM2 live activity for ${minimumRap.toLocaleString()}+ RAP users…`,
+      "Scanning MM2 live activity with no RAP minimum…",
     );
 
     try {
       const result = await scanMm2RapActivity({
-        minimumRap,
+        minimumRap: null,
         limit,
       });
 
@@ -56,10 +41,10 @@ export const rbx2mm2Command = {
       await interaction.editReply({
         content:
           result.players.length > 0
-            ? `Found ${result.players.length} Murder Mystery 2 player${result.players.length === 1 ? "" : "s"} with ${minimumRap.toLocaleString()}+ Roblox RAP.`
+            ? `Found ${result.players.length} public-joinable Murder Mystery 2 player${result.players.length === 1 ? "" : "s"}. No RAP minimum is applied.`
             : result.presenceRateLimited && !result.presenceFallbackUsed
               ? "Roblox is rate-limiting live presence checks right now."
-              : `No current MM2 player with ${minimumRap.toLocaleString()}+ Roblox RAP was verified in this pass.`,
+              : "No current public-joinable MM2 player was verified in this pass.",
         embeds: batches[0] ?? [],
       });
 
@@ -71,7 +56,7 @@ export const rbx2mm2Command = {
     } catch (error) {
       console.error("/rbx2mm2 failed:", error);
       await interaction.editReply(
-        "MM2 RAP activity lookup is temporarily unavailable. Try again in a moment.",
+        "MM2 activity lookup is temporarily unavailable. Try again in a moment.",
       );
     }
   },
@@ -80,25 +65,22 @@ export const rbx2mm2Command = {
 function buildEmbeds(result) {
   const summary = new EmbedBuilder()
     .setColor(result.players.length > 0 ? 0x57f287 : 0x2f3136)
-    .setTitle("Murder Mystery 2 · RAP live scan")
+    .setTitle("Murder Mystery 2 · live scan")
     .setDescription(
       [
         `Candidate pool: ${Number(result.candidatePoolSize ?? result.candidateCount ?? 0).toLocaleString()}`,
         `Candidates checked: ${Number(result.presenceScannedCount ?? 0).toLocaleString()}`,
         `MM2 active seen: ${result.gameActiveCount ?? 0}`,
-        `RAP checks attempted: ${result.verificationAttempts ?? 0}`,
-        `Below RAP: ${result.belowRapCount ?? 0}`,
-        `RAP unavailable: ${result.rapUnavailableCount ?? 0}`,
         `Verified public-joinable results: ${result.verifiedCount ?? 0}`,
         `Mode: ${result.liveCacheHit ? "MM2 live cache" : result.presenceFallbackUsed ? "public presence fallback" : result.presenceRateLimited ? "rate-limited" : "fresh Roblox presence"}`,
-        `Roblox RAP threshold: ${Number(result.minimumRap ?? DEFAULT_MM2_RAP).toLocaleString()}+`,
+        "Roblox RAP threshold: none",
         `Scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
       ].join("\n"),
     )
     .addFields({
       name: "Sources",
       value:
-        "Same SE TARG discovery streams + Roblox live presence + public Roblox/Rolimon's RAP verification. RAP-only: no MM2 inventory/value lookup is used.",
+        "Public candidate discovery + Roblox live presence + public joinability verification. RAP is informational only and does not filter results.",
       inline: false,
     })
     .setTimestamp();
