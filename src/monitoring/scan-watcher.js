@@ -1,183 +1,20 @@
 import { EmbedBuilder } from "discord.js";
-import {
-  getPresenceBatched,
-  scanDiscoveredTargets,
-} from "./target-scanner.js";
-import { getFollowUserJoinUrl } from "../roblox/game-session.js";
-import {
-  getScanWatchlist,
-  updateScanPresences,
-} from "../storage/scan-watchlist.js";
+import { scanDiscoveredTargets } from "./target-scanner.js";
+import { getScanWatchlist } from "../storage/scan-watchlist.js";
 
-const DEFAULT_SCAN_WATCH_INTERVAL_MS = 60 * 1000;
-const DEFAULT_SCAN_WATCH_USERS_PER_CYCLE = 200;
-const PRESENCE_BATCH_SIZE = 50;
 const DEFAULT_AUTO_TARGET_FEED_INTERVAL_MS = 60 * 1000;
-const DEFAULT_AUTO_TARGET_FEED_LIMIT = 25;
+const DEFAULT_AUTO_TARGET_FEED_LIMIT = 50;
 const AUTO_FEED_DEDUPE_MS = 6 * 60 * 60 * 1000;
 const autoFeedSeenAt = new Map();
 let autoFeedRunning = false;
-let scanWatcherRunning = false;
-let scanWatcherCursor = 0;
 let lastAutoFeedChannelKey = null;
 
 export async function startScanWatcher(client) {
-  const intervalMs = readPositiveInteger(
-    process.env.ROBLOX_SCAN_WATCH_INTERVAL_MS,
-    DEFAULT_SCAN_WATCH_INTERVAL_MS,
-  );
-
-  const run = async () => {
-    if (scanWatcherRunning) return;
-    scanWatcherRunning = true;
-
-    try {
-      await checkScanWatchlist(client);
-    } catch (error) {
-      console.error("Scan watcher run failed:", error);
-    } finally {
-      scanWatcherRunning = false;
-    }
-  };
-
-  const initialTimer = setTimeout(run, 20_000);
-  initialTimer.unref?.();
-  const interval = setInterval(run, intervalMs);
-  interval.unref?.();
-
+  // The old /scan watchlist presence loop intentionally no longer starts here.
+  // It competed with the automatic target feed for Roblox presence capacity and
+  // caused the feed to hit 429s before its own discovery pass could finish.
+  // The automatic discovery feed is now the single recurring presence consumer.
   startAutomaticTargetFeed(client);
-}
-
-async function checkScanWatchlist(client) {
-  const entries = await getScanWatchlist();
-  if (entries.length === 0) return;
-
-  const usersPerCycle = Math.max(
-    1,
-    Math.min(
-      entries.length,
-      readPositiveInteger(
-        process.env.ROBLOX_SCAN_WATCH_USERS_PER_CYCLE,
-        DEFAULT_SCAN_WATCH_USERS_PER_CYCLE,
-      ),
-    ),
-  );
-  const start = scanWatcherCursor % entries.length;
-  const selectedEntries = [];
-
-  for (let offset = 0; offset < usersPerCycle; offset += 1) {
-    selectedEntries.push(
-      entries[(start + offset) % entries.length],
-    );
-  }
-  scanWatcherCursor =
-    (start + selectedEntries.length) % entries.length;
-
-  const ids = selectedEntries.map((entry) => entry.userId);
-  const presenceScan = await getPresenceBatched(ids, {
-    batchSize: PRESENCE_BATCH_SIZE,
-    maxAttempts: 1,
-    interBatchDelayMs: 1_000,
-    stopOnRateLimit: true,
-    priority: "background",
-  });
-  const presences = presenceScan.presences;
-
-  const presenceById = new Map(
-    presences.map((presence) => [Number(presence.userId), presence]),
-  );
-
-  const updates = [];
-
-  for (const entry of selectedEntries) {
-    const presence = presenceById.get(Number(entry.userId));
-    if (!presence) continue;
-
-    const currentType = Number(presence.userPresenceType);
-    const previousType =
-      entry.lastPresenceType === null || entry.lastPresenceType === undefined
-        ? null
-        : Number(entry.lastPresenceType);
-
-    const enteredGame =
-      previousType !== null &&
-      previousType !== 2 &&
-      currentType === 2;
-
-    if (enteredGame) {
-      await publishScanAlert(client, entry, presence).catch((error) => {
-        console.warn(
-          `Could not publish scan alert for Roblox user ${entry.userId}:`,
-          error,
-        );
-      });
-    }
-
-    updates.push({
-      userId: entry.userId,
-      presenceType: currentType,
-      alerted: enteredGame,
-    });
-  }
-
-  await updateScanPresences(updates);
-}
-
-async function publishScanAlert(
-  client,
-  entry,
-  presence,
-  { footer = "Triggered by /scan watchlist · public Roblox presence" } = {},
-) {
-  const profileUrl =
-    `https://www.roblox.com/users/${entry.userId}/profile`;
-  const followJoinUrl = getFollowUserJoinUrl(entry.userId);
-  const name =
-    entry.displayName && entry.username
-      ? `${entry.displayName} (@${entry.username})`
-      : entry.username
-        ? `@${entry.username}`
-        : `Roblox user ${entry.userId}`;
-
-  const embed = new EmbedBuilder()
-    .setColor(0x57f287)
-    .setTitle(`${name} is now in game`)
-    .setURL(profileUrl)
-    .addFields(
-      {
-        name: "RAP",
-        value:
-          typeof entry.rapValue === "number"
-            ? `${entry.rapValue.toLocaleString()} RAP`
-            : "Unavailable",
-        inline: true,
-      },
-      {
-        name: "Current game",
-        value: presence?.lastLocation ?? "In game",
-        inline: true,
-      },
-      {
-        name: "Profile",
-        value: `[Open Roblox profile](${profileUrl})`,
-        inline: false,
-      },
-      {
-        name: "Direct join",
-        value: followJoinUrl
-          ? `[Join player](${followJoinUrl})`
-          : "Unavailable",
-        inline: false,
-      },
-    )
-    .setFooter({ text: footer })
-    .setTimestamp();
-
-  for (const channelId of entry.channels ?? []) {
-    const channel = await client.channels.fetch(channelId).catch(() => null);
-    if (!channel?.isTextBased() || typeof channel.send !== "function") continue;
-    await channel.send({ embeds: [embed] });
-  }
 }
 
 function readPositiveInteger(value, fallback) {
@@ -214,9 +51,6 @@ function startAutomaticTargetFeed(client) {
         lastAutoFeedChannelKey = channelKey;
       }
 
-      // Run the discovery pipeline directly. This is intentionally not a read
-      // from /target's live cache: the feed must keep discovering while nobody
-      // is manually invoking a command. null means RAP is informational only.
       const result = await scanDiscoveredTargets({
         minimumValue: null,
         minimumRap: null,
