@@ -197,3 +197,18 @@ test("target live scan accepts all in-game Roblox presences", async () => {
     "interactive /target must not filter live users to the old priority-game list",
   );
 });
+
+
+test("interactive target uses indexed RAP without re-fetching value data", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(
+    new URL("../src/monitoring/target-scanner.js", import.meta.url),
+    "utf8",
+  );
+  assert.equal(source.includes("preferIndexedRap: true"), true);
+  assert.equal(
+    source.includes('Skipping background candidate refresh while /target is active.'),
+    true,
+  );
+  assert.equal(source.includes("10 * 60 * 1000"), true);
+});
