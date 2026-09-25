@@ -27,16 +27,15 @@ test("/rbx2mm2 has no RAP threshold option", () => {
   assert.match(definition.description, /no RAP minimum/i);
 });
 
-test("/rbx2mm2 supports up to 50 results", () => {
+test("/rbx2mm2 has no fixed result-count option", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "rbx2mm2",
   );
   const definition = command.definition.toJSON();
-  const limit = definition.options.find((option) => option.name === "limit");
+  const limit = definition.options?.find((option) => option.name === "limit");
 
-  assert.ok(limit);
-  assert.equal(limit.max_value, 50);
-  assert.match(limit.description, /default 50, max 50/i);
+  assert.equal(limit, undefined);
+  assert.match(definition.description, /Murder Mystery 2/i);
 });
 
 test("Discord command and option descriptions stay within 100 characters", () => {
