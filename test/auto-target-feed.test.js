@@ -15,6 +15,18 @@ test("automatic target feed runs discovery directly with no RAP minimum", async 
   assert.match(source, /all Roblox games · no RAP minimum/);
 });
 
+test("legacy scan-watchlist presence loop cannot compete with auto feed", async () => {
+  const source = await readFile(
+    new URL("../src/monitoring/scan-watcher.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(source.includes("getPresenceBatched"), false);
+  assert.equal(source.includes("checkScanWatchlist("), false);
+  assert.equal(source.includes("updateScanPresences"), false);
+  assert.match(source, /single recurring presence consumer/);
+});
+
 test("rbx2mm2 invokes the scanner with no RAP minimum", async () => {
   const source = await readFile(
     new URL("../src/commands/rbx2mm2.js", import.meta.url),
