@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { commandModules } from "../src/commands/index.js";
 
-test("target and rbx2mm2 are registered as manual slash commands", () => {
+test("manual slash commands are registered", () => {
   const names = commandModules.map((command) => command.definition.name);
-  assert.deepEqual(names, ["target", "rbx2mm2"]);
+  assert.deepEqual(names, ["target", "rbx2mm2", "dev", "dc2roblox"]);
 
   for (const command of commandModules) {
     const definition = command.definition.toJSON();
@@ -36,6 +36,28 @@ test("/rbx2mm2 has no fixed result-count option", () => {
 
   assert.equal(limit, undefined);
   assert.match(definition.description, /Murder Mystery 2/i);
+});
+
+test("/dev is developer discovery, not a RAP/value filter", () => {
+  const command = commandModules.find(
+    (candidate) => candidate.definition.name === "dev",
+  );
+  const definition = command.definition.toJSON();
+  const optionNames = (definition.options ?? []).map((option) => option.name);
+
+  assert.deepEqual(optionNames, ["limit"]);
+  assert.match(definition.description, /publicly joinable games/i);
+});
+
+test("/dc2roblox only accepts a Discord user selection", () => {
+  const command = commandModules.find(
+    (candidate) => candidate.definition.name === "dc2roblox",
+  );
+  const definition = command.definition.toJSON();
+
+  assert.equal(definition.options?.length, 1);
+  assert.equal(definition.options?.[0]?.name, "member");
+  assert.equal(definition.options?.[0]?.required, true);
 });
 
 test("Discord command and option descriptions stay within 100 characters", () => {
