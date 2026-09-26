@@ -85,15 +85,18 @@ test("/dev requires active creator evidence instead of RAP/value", () => {
   assert.equal(minPlayers?.max_value, 1_000_000);
 });
 
-test("/dc2roblox only accepts a Discord user selection", () => {
+test("/dc2roblox accepts a server user or arbitrary Discord user ID", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "dc2roblox",
   );
   const definition = command.definition.toJSON();
+  const optionNames = (definition.options ?? []).map((option) => option.name);
 
-  assert.equal(definition.options?.length, 1);
-  assert.equal(definition.options?.[0]?.name, "member");
-  assert.equal(definition.options?.[0]?.required, true);
+  assert.deepEqual(optionNames, ["member", "discord_id"]);
+  assert.equal(definition.options?.[0]?.required, false);
+  assert.equal(definition.options?.[1]?.required, false);
+  assert.equal(definition.options?.[1]?.min_length, 17);
+  assert.equal(definition.options?.[1]?.max_length, 20);
 });
 
 test("Discord command and option descriptions stay within 100 characters", () => {
