@@ -27,7 +27,7 @@ export const rbx2mm2Command = {
       await interaction.editReply({
         content:
           result.players.length > 0
-            ? `Found ${result.players.length} public-joinable Murder Mystery 2 player${result.players.length === 1 ? "" : "s"}. 5K+ RAP minimum or fixed result-count cap is applied.`
+            ? `Found ${result.players.length} public-joinable Murder Mystery 2 player${result.players.length === 1 ? "" : "s"}. 5K+ RAP minimum is applied; there is no fixed result-count cap.`
             : result.presenceRateLimited
               ? `Roblox rate-limited this live scan after checking ${Number(result.presenceScannedCount ?? 0).toLocaleString()} candidates. This pass was cut short, so 0 returned does not mean there are no active MM2 players.`
               : "No current public-joinable Murder Mystery 2 player was verified in this pass.",
