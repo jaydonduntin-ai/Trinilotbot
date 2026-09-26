@@ -38,15 +38,21 @@ test("/rbx2mm2 has no fixed result-count option", () => {
   assert.match(definition.description, /Murder Mystery 2/i);
 });
 
-test("/dev is developer discovery, not a RAP/value filter", () => {
+test("/dev requires active creator evidence instead of RAP/value", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "dev",
   );
   const definition = command.definition.toJSON();
   const optionNames = (definition.options ?? []).map((option) => option.name);
 
-  assert.deepEqual(optionNames, ["limit"]);
-  assert.match(definition.description, /publicly joinable games/i);
+  assert.deepEqual(optionNames, ["limit", "min_players"]);
+  assert.match(definition.description, /active Roblox experiences/i);
+
+  const minPlayers = definition.options?.find(
+    (option) => option.name === "min_players",
+  );
+  assert.equal(minPlayers?.min_value, 1);
+  assert.equal(minPlayers?.max_value, 1_000_000);
 });
 
 test("/dc2roblox only accepts a Discord user selection", () => {
