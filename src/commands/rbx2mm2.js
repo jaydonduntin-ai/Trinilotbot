@@ -10,7 +10,7 @@ export const rbx2mm2Command = {
   definition: new SlashCommandBuilder()
     .setName("rbx2mm2")
     .setDescription(
-      "Find public-joinable players currently active in Murder Mystery 2. No RAP minimum.",
+      "Find public-joinable players currently active in Murder Mystery 2. 5K+ RAP minimum.",
     ),
 
   async execute(interaction) {
@@ -27,7 +27,7 @@ export const rbx2mm2Command = {
       await interaction.editReply({
         content:
           result.players.length > 0
-            ? `Found ${result.players.length} public-joinable Murder Mystery 2 player${result.players.length === 1 ? "" : "s"}. No RAP minimum or fixed result-count cap is applied.`
+            ? `Found ${result.players.length} public-joinable Murder Mystery 2 player${result.players.length === 1 ? "" : "s"}. 5K+ RAP minimum or fixed result-count cap is applied.`
             : result.presenceRateLimited
               ? `Roblox rate-limited this live scan after checking ${Number(result.presenceScannedCount ?? 0).toLocaleString()} candidates. This pass was cut short, so 0 returned does not mean there are no active MM2 players.`
               : "No current public-joinable Murder Mystery 2 player was verified in this pass.",
@@ -67,7 +67,7 @@ async function scanMm2TargetSession() {
 
   while (Date.now() - startedAt < MM2_SESSION_TIME_BUDGET_MS) {
     const pass = await scanMm2RapActivity({
-      minimumRap: null,
+      minimumRap: 5_000,
       // MAX_TARGETS is only the scanner page size here. The command aggregates
       // unique MM2 results across passes and has no user-facing result cap.
       limit: MAX_TARGETS,
@@ -140,7 +140,7 @@ function buildTargetEmbeds(result) {
         `Public-joinable returned: ${result.players.length}`,
         `Passes: ${result.passCount ?? 1}`,
         `Presence mode: ${result.liveCacheHit ? "live cache" : result.presenceFallbackUsed ? "public fallback" : result.presenceRateLimited ? "rate-limited" : "fresh"}`,
-        "Roblox RAP threshold: none",
+        "Roblox RAP threshold: 5,000+",
         "Result-count cap: none",
         `Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
       ].join("\n"),
