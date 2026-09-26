@@ -7,6 +7,9 @@ const DEFAULT_ROUTE_MIN_SPACING_MS = 750;
 const DEFAULT_429_BACKOFF_MS = 60_000;
 const DEFAULT_MAX_BACKOFF_MS = 15 * 60 * 1000;
 
+// Keep slot allocation serialized, but never sleep while holding this lock.
+// A cooldown on one Roblox route must not stall unrelated routes such as
+// presence or games/public-server verification.
 let reservationTail = Promise.resolve();
 let nextGlobalRequestAt = 0;
 const nextRouteRequestAt = new Map();
@@ -81,7 +84,7 @@ function getManagedRoute(input) {
   };
 }
 
-async function reserveRequestSlot(route) {
+async function allocateRequestSlot(route) {
   let release;
   const previous = reservationTail;
   reservationTail = new Promise((resolve) => {
@@ -90,25 +93,57 @@ async function reserveRequestSlot(route) {
 
   await previous;
   try {
+    const now = Date.now();
+    const routeNextAt = Number(nextRouteRequestAt.get(route.key) ?? 0);
+    const cooldownUntil = Number(routeCooldownUntil.get(route.key) ?? 0);
+    const routeReadyAt = Math.max(routeNextAt, cooldownUntil);
+
+    // Do not reserve a global slot far in the future just because this one
+    // route is cooling down. Tell the caller when to retry instead.
+    if (routeReadyAt > now) {
+      return {
+        reserved: false,
+        waitUntil: routeReadyAt,
+      };
+    }
+
     const globalSpacingMs = positiveIntegerEnv(
       "ROBLOX_FETCH_MIN_SPACING_MS",
       DEFAULT_MIN_SPACING_MS,
     );
-    const routeNextAt = Number(nextRouteRequestAt.get(route.key) ?? 0);
-    const cooldownUntil = Number(routeCooldownUntil.get(route.key) ?? 0);
-    const waitUntil = Math.max(
-      nextGlobalRequestAt,
-      routeNextAt,
-      cooldownUntil,
-    );
-    const waitMs = Math.max(0, waitUntil - Date.now());
-    if (waitMs > 0) await sleep(waitMs);
+    const slotAt = Math.max(now, nextGlobalRequestAt);
 
-    const now = Date.now();
-    nextGlobalRequestAt = now + globalSpacingMs;
-    nextRouteRequestAt.set(route.key, now + route.spacingMs);
+    nextGlobalRequestAt = slotAt + globalSpacingMs;
+    nextRouteRequestAt.set(route.key, slotAt + route.spacingMs);
+
+    return {
+      reserved: true,
+      waitUntil: slotAt,
+    };
   } finally {
     release();
+  }
+}
+
+async function reserveRequestSlot(route) {
+  while (true) {
+    const allocation = await allocateRequestSlot(route);
+    const waitMs = Math.max(0, allocation.waitUntil - Date.now());
+    if (waitMs > 0) await sleep(waitMs);
+
+    if (!allocation.reserved) {
+      continue;
+    }
+
+    // Another in-flight request on this same route may have received a 429
+    // while we were waiting for our scheduled slot. Re-check before sending
+    // so already-scheduled work also respects the new cooldown.
+    const cooldownUntil = Number(routeCooldownUntil.get(route.key) ?? 0);
+    if (cooldownUntil > Date.now()) {
+      continue;
+    }
+
+    return;
   }
 }
 
