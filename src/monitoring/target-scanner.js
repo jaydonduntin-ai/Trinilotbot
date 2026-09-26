@@ -952,6 +952,7 @@ async function scanDiscoveredTargetsInternal({
   minimumValue = null,
   minimumRap = getMinimumTargetRap(),
   limit = DEFAULT_TARGET_COUNT,
+  qualifyPlayer = null,
 } = {}) {
   await ensureTargetHistoryHydrated();
 
@@ -963,7 +964,7 @@ async function scanDiscoveredTargetsInternal({
   const cachedPresences = getFreshLiveCachePresences({
     minimumValue,
     minimumRap,
-    limit: Math.min(MAX_TARGETS + 5, requestedLimit + 5),
+    limit: qualifyPlayer ? Math.min(40, Math.max(requestedLimit, 20)) : Math.min(MAX_TARGETS + 5, requestedLimit + 5),
   });
 
   let cachedJoinablePlayers = [];
@@ -972,17 +973,17 @@ async function scanDiscoveredTargetsInternal({
     const cachedResults = await mapWithConcurrency(
       cachedPresences,
       VERIFY_CONCURRENCY,
-      (presence) =>
-        buildDiscoveredTargetPlayer(presence, {
+      async (presence) =>
+        qualifyTargetPlayer(await buildDiscoveredTargetPlayer(presence, {
           minimumValue,
           minimumRap,
           includeGameValue: false,
           preferIndexedRap: true,
-        }).catch(() => null),
+        }).catch(() => null), qualifyPlayer),
     );
     const cachedVerified = cachedResults
       .filter((player) => player?.qualifies)
-      .slice(0, Math.min(MAX_TARGETS, requestedLimit + 2));
+      .slice(0, qualifyPlayer ? Math.max(requestedLimit * 2, requestedLimit + 10) : Math.min(MAX_TARGETS, requestedLimit + 2));
     const finalCached = await revalidateCurrentlyInGame(
       cachedVerified,
       { trustRecentPresence: true },
@@ -1210,8 +1211,8 @@ async function scanDiscoveredTargetsInternal({
 
       const batch = activeWave.slice(index, index + VERIFY_CONCURRENCY);
       const batchResults = await Promise.all(
-        batch.map((presence) =>
-          buildDiscoveredTargetPlayer(presence, {
+        batch.map(async (presence) =>
+          qualifyTargetPlayer(await buildDiscoveredTargetPlayer(presence, {
             minimumValue,
             minimumRap,
             includeGameValue: false,
@@ -1226,7 +1227,7 @@ async function scanDiscoveredTargetsInternal({
               id: Number(presence.userId),
               reason: "verification-error",
             };
-          }),
+          }), qualifyPlayer),
         ),
       );
 
@@ -1267,9 +1268,9 @@ async function scanDiscoveredTargetsInternal({
     }
   }
 
-  const selectedPlayers = sortTargetPlayersForPriority(
+  const selectedPlayers = diversifyPlayersByRap(sortTargetPlayersForPriority(
     [...mergedJoinableById.values()],
-  )
+  ))
     .slice(0, requestedLimit)
     .map(({ qualifies, ...player }) => player);
   await rememberSurfacedTargets(selectedPlayers);
@@ -1320,6 +1321,17 @@ async function scanDiscoveredTargetsInternal({
       ]),
     ],
   };
+}
+
+async function qualifyTargetPlayer(player, qualifyPlayer) {
+  if (!player?.qualifies || !qualifyPlayer) return player;
+  try {
+    const enriched = await qualifyPlayer(player);
+    return enriched?.qualifies ? enriched : { qualifies: false, reason: "association-unavailable" };
+  } catch (error) {
+    console.warn("Target association qualification failed:", error);
+    return { qualifies: false, reason: "association-unavailable" };
+  }
 }
 
 export async function scanDeveloperTargets({

@@ -4,11 +4,10 @@ import {
   MAX_TARGET_THRESHOLD,
   scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
-import { lookupRobloxToDiscord } from "../sources/associations.js";
+import { createTargetAssociationQualifier } from "./target-associations.js";
 
 const TARGET_DEFAULT_LIMIT = 50;
 const TARGET_DEFAULT_MIN_RAP = 5_000;
-const DISCORD_LOOKUP_CONCURRENCY = 4;
 
 export const targetsCommand = {
   definition: new SlashCommandBuilder()
@@ -52,13 +51,12 @@ export const targetsCommand = {
         minimumValue,
         minimumRap,
         limit,
+        qualifyPlayer: createTargetAssociationQualifier({
+          guildId: interaction.guildId,
+          client: interaction.client,
+        }),
       });
       result.players = result.players ?? [];
-      result.players = await requireDiscordAssociations(
-        result.players,
-        interaction.guildId,
-        interaction.client,
-      );
       result.requestedLimit = limit;
       result.discordVerifiedCount = result.players.length;
 
@@ -316,46 +314,6 @@ function escapeMarkdown(value) {
 }
 
 
-async function requireDiscordAssociations(players, guildId, client) {
-  const input = Array.isArray(players) ? players : [];
-  const output = [];
-  let cursor = 0;
-  async function worker() {
-    while (cursor < input.length) {
-      const index = cursor++;
-      const player = input[index];
-      const lookup = await lookupRobloxToDiscord({
-        userId: player?.id ?? player?.userId,
-        username: player?.username,
-        guildId,
-      }).catch(() => null);
-      const association = lookup?.association ?? null;
-      if (!association?.verified || association.conflict) continue;
-      const discordId = association.discordId ?? association.discordIds?.[0] ?? null;
-      if (!/^\d{17,20}$/.test(String(discordId ?? ""))) continue;
-      const discordUser = discordId
-        ? await client.users.fetch(discordId, { force: false }).catch(() => null)
-        : null;
-      output.push({
-        ...player,
-        discordAssociation: {
-          ...association,
-          discordId,
-          discordUsername: discordUser?.username ?? association.discordUsername ?? null,
-          discordGlobalName: discordUser?.globalName ?? association.discordGlobalName ?? null,
-        },
-      });
-    }
-  }
-  await Promise.all(
-    Array.from(
-      { length: Math.min(DISCORD_LOOKUP_CONCURRENCY, Math.max(1, input.length)) },
-      () => worker(),
-    ),
-  );
-  return output;
-}
-
 function formatDiscordAssociation(association) {
   const label = association.discordGlobalName
     ? `${association.discordGlobalName}${association.discordUsername ? ` (@${association.discordUsername})` : ""}`
@@ -364,5 +322,6 @@ function formatDiscordAssociation(association) {
       : association.discordId
         ? `<@${association.discordId}>`
         : "Verified Discord";
-  return `${label}\nSource: ${association.source ?? "Verified association source"}`;
+  const evidence = association.evidenceUrl ? `\nEvidence: ${association.evidenceUrl}` : "";
+  return `${label}\nSource: ${association.source ?? "Verified association source"}${evidence}`;
 }

@@ -116,6 +116,7 @@ function createGameTargetCommand({
                   limit,
                 });
 
+        const embeds = buildGameTargetEmbeds(result);
         await interaction.editReply({
           content:
             result.players.length > 0
@@ -129,8 +130,11 @@ function createGameTargetCommand({
                   ? `No current ${gameLabel} player with a matching RBLXValue MM2 profile at or above ${minimumMm2Value.toLocaleString()} was verified in this pass.`
                   : `No current ${gameLabel} player at or above ${minimumValue.toLocaleString()} Roblox collectible value was verified in this pass.`
                 : `No active ${gameLabel} player at or above ${result.minimumRap.toLocaleString()} Roblox RAP was verified in this pass.`,
-          embeds: buildGameTargetEmbeds(result).slice(0, 10),
+          embeds: embeds.slice(0, 10),
         });
+        for (let index = 10; index < embeds.length; index += 10) {
+          await interaction.followUp({ embeds: embeds.slice(index, index + 10) });
+        }
       } catch (error) {
         console.error(`/${name} scan failed:`, error);
         await interaction.editReply(
