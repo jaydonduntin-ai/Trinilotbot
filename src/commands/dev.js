@@ -9,13 +9,14 @@ import {
 
 const DEV_DEFAULT_LIMIT = 10;
 const DEV_MAX_LIMIT = Math.min(MAX_TARGETS, 25);
-const DEV_DEFAULT_MIN_PLAYERS = 100;
+const DEV_DEFAULT_MIN_RAP = 5_000;
+const DEV_DEFAULT_MIN_VISITS = 100_000;
 
 export const devCommand = {
   definition: new SlashCommandBuilder()
     .setName("dev")
     .setDescription(
-      "Find creators behind active Roblox experiences with verified player-count evidence.",
+      "Find in-game Roblox developers with 5K+ RAP and a 100K+ visit owned experience.",
     )
     .addIntegerOption((option) =>
       option
@@ -28,18 +29,25 @@ export const devCommand = {
     )
     .addIntegerOption((option) =>
       option
-        .setName("min_players")
-        .setDescription(
-          `Minimum current players on a creator's experience; default ${DEV_DEFAULT_MIN_PLAYERS}.`,
-        )
-        .setMinValue(1)
-        .setMaxValue(1_000_000),
+        .setName("min_rap")
+        .setDescription("Minimum Roblox RAP; default 5,000.")
+        .setMinValue(5_000)
+        .setMaxValue(2_500_000_000),
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("min_visits")
+        .setDescription("Minimum lifetime visits on an owned experience; default 100,000.")
+        .setMinValue(100_000)
+        .setMaxValue(10_000_000_000),
     ),
 
   async execute(interaction) {
     const limit = interaction.options.getInteger("limit") ?? DEV_DEFAULT_LIMIT;
-    const minimumPlayers =
-      interaction.options.getInteger("min_players") ?? DEV_DEFAULT_MIN_PLAYERS;
+    const minimumRap =
+      interaction.options.getInteger("min_rap") ?? DEV_DEFAULT_MIN_RAP;
+    const minimumVisits =
+      interaction.options.getInteger("min_visits") ?? DEV_DEFAULT_MIN_VISITS;
 
     await interaction.deferReply();
 
@@ -48,15 +56,14 @@ export const devCommand = {
       // experiences that do not meet the requested live-player floor.
       const scanLimit = Math.min(MAX_TARGETS, Math.max(limit * 3, limit));
       const result = await scanDeveloperTargets({
-        // /dev is about creator evidence + meaningful game activity, not wealth.
         minimumValue: null,
-        minimumRap: null,
+        minimumRap,
         limit: scanLimit,
       });
 
       const verifiedPlayers = await verifyDeveloperGameTraffic(
         result.players,
-        minimumPlayers,
+        minimumVisits,
         limit,
       );
 
@@ -69,7 +76,7 @@ export const devCommand = {
             `Creator accounts resolved: ${result.developerCandidates ?? 0}`,
             `Developer presence checks: ${result.presenceChecked ?? 0}`,
             `In-game creator candidates: ${result.inGameDeveloperCandidates ?? 0}`,
-            `Verified creators at ${formatNumber(minimumPlayers)}+ current players: ${verifiedPlayers.length}`,
+            `Verified creators with ${formatNumber(minimumVisits)}+ lifetime visits: ${verifiedPlayers.length}`,
             `Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
             result.presenceFallbackUsed
               ? "Presence mode: public fallback used"
@@ -91,8 +98,8 @@ export const devCommand = {
       await interaction.editReply({
         content:
           verifiedPlayers.length > 0
-            ? `Found ${verifiedPlayers.length} Roblox developer${verifiedPlayers.length === 1 ? "" : "s"} with an experience at ${formatNumber(minimumPlayers)}+ current players.`
-            : `No creator was verified with an experience at ${formatNumber(minimumPlayers)}+ current players in this pass.`,
+            ? `Found ${verifiedPlayers.length} Roblox developer${verifiedPlayers.length === 1 ? "" : "s"} with 5K+ RAP and an owned experience at ${formatNumber(minimumVisits)}+ lifetime visits.`
+            : `No creator met the in-game, RAP, ownership, and visit requirements in this pass.`,
         embeds: embeds.slice(0, 10),
       });
 
@@ -110,7 +117,7 @@ export const devCommand = {
   },
 };
 
-async function verifyDeveloperGameTraffic(players, minimumPlayers, limit) {
+async function verifyDeveloperGameTraffic(players, minimumVisits, limit) {
   const input = Array.isArray(players) ? players : [];
   const gamePromises = new Map();
 
@@ -138,13 +145,14 @@ async function verifyDeveloperGameTraffic(players, minimumPlayers, limit) {
     for (const evidence of concreteEvidence) {
       const game = await loadGame(evidence.universeId);
       const playing = Number(game?.playing);
-      if (!Number.isFinite(playing) || playing < minimumPlayers) continue;
+      const visits = Number(game?.visits);
+      if (!Number.isFinite(visits) || visits < minimumVisits) continue;
 
       enrichedEvidence.push({
         ...evidence,
         gameName: game?.name ?? evidence.gameName,
         playing,
-        visits: Number.isFinite(Number(game?.visits)) ? Number(game.visits) : null,
+        visits: Number.isFinite(visits) ? visits : null,
         rootPlaceId: Number.isInteger(Number(game?.rootPlaceId))
           ? Number(game.rootPlaceId)
           : null,
@@ -156,19 +164,23 @@ async function verifyDeveloperGameTraffic(players, minimumPlayers, limit) {
     const highestPlayers = Math.max(
       ...enrichedEvidence.map((entry) => Number(entry.playing) || 0),
     );
+    const highestVisits = Math.max(
+      ...enrichedEvidence.map((entry) => Number(entry.visits) || 0),
+    );
 
     verified.push({
       ...player,
       developerEvidence: enrichedEvidence,
       developerGamePlayers: highestPlayers,
+      developerGameVisits: highestVisits,
     });
   }
 
   return verified
     .sort(
       (left, right) =>
-        Number(right.developerGamePlayers ?? 0) -
-        Number(left.developerGamePlayers ?? 0),
+        Number(right.developerGameVisits ?? 0) -
+        Number(left.developerGameVisits ?? 0),
     )
     .slice(0, limit);
 }
@@ -204,7 +216,7 @@ function buildDeveloperEmbed(player) {
       },
       {
         name: "Current creator activity",
-        value: `${formatNumber(player.developerGamePlayers ?? 0)} players on strongest qualifying experience`,
+        value: `${formatNumber(player.developerGameVisits ?? 0)} lifetime visits on strongest qualifying experience`,
         inline: false,
       },
       {

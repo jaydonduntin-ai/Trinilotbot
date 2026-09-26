@@ -63,12 +63,9 @@ test("custom association source accepts cached get-discord result rows", async (
       username: "devclockwrks",
       guildId: null,
     });
-    assert.deepEqual(result.association.discordIds, [
-      "261173921657782273",
-      "143804501852291072",
-    ]);
+    assert.deepEqual(result.association.discordIds, ["143804501852291072"]);
     assert.match(result.association.source, /RoVer/);
-    assert.equal(result.association.conflict, true);
+    assert.equal(result.association.conflict, false);
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv("BLOXLINK_API_KEY", previous.bloxlink);
@@ -127,5 +124,28 @@ test("custom association source accepts cached Discord-to-Roblox result rows", a
     restoreEnv("DISCORD_TO_ROBLOX_SOURCE_URL", previous.sourceUrl);
     restoreEnv("ROBLOX_ASSOCIATION_SOURCE_NAME", previous.sourceName);
     restoreEnv("ROBLOX_ASSOCIATION_API_KEY", previous.apiKey);
+  }
+});
+
+test("Roblox-to-Discord lookup rejects username-only cached associations", async () => {
+  const originalFetch = globalThis.fetch;
+  const previous = {
+    bloxlink: process.env.BLOXLINK_API_KEY,
+    sourceUrl: process.env.ROBLOX_TO_DISCORD_SOURCE_URL,
+  };
+  delete process.env.BLOXLINK_API_KEY;
+  process.env.ROBLOX_TO_DISCORD_SOURCE_URL = "https://assoc.test/get-discord";
+  globalThis.fetch = async () => jsonResponse({
+    success: true,
+    found: true,
+    results: [{ discord_id: "123456789012345678", roblox_username: "example", source: "rover" }],
+  });
+  try {
+    const result = await lookupRobloxToDiscord({ userId: 42, username: "example" });
+    assert.equal(result.association, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("BLOXLINK_API_KEY", previous.bloxlink);
+    restoreEnv("ROBLOX_TO_DISCORD_SOURCE_URL", previous.sourceUrl);
   }
 });
