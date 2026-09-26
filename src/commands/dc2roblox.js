@@ -9,33 +9,52 @@ import { lookupDiscordToRoblox } from "../sources/associations.js";
 export const dc2robloxCommand = {
   definition: new SlashCommandBuilder()
     .setName("dc2roblox")
-    .setDescription("Show a server member's verified Roblox account.")
+    .setDescription("Show a Discord user's verified Roblox account.")
     .addUserOption((option) =>
       option
         .setName("member")
-        .setDescription("Discord member to check for a verified Roblox link.")
-        .setRequired(true),
+        .setDescription("Discord user to check when they are available in this server."),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("discord_id")
+        .setDescription("Discord user ID to check, even if that user is not in this server.")
+        .setMinLength(17)
+        .setMaxLength(20),
     ),
 
   async execute(interaction) {
-    const target = interaction.options.getUser("member", true);
+    const selectedUser = interaction.options.getUser("member");
+    const rawDiscordId = interaction.options.getString("discord_id")?.trim() ?? null;
 
     if (!interaction.guildId || !interaction.guild) {
       await interaction.reply("This command only works inside the bot's server.");
       return;
     }
 
-    const member = await interaction.guild.members.fetch(target.id).catch(() => null);
-    if (!member) {
-      await interaction.reply("That user is not a member of this server.");
+    if (!selectedUser && !rawDiscordId) {
+      await interaction.reply(
+        "Choose a Discord user or provide their Discord user ID.",
+      );
       return;
+    }
+
+    if (rawDiscordId && !/^\d{17,20}$/.test(rawDiscordId)) {
+      await interaction.reply("That Discord user ID is not valid.");
+      return;
+    }
+
+    const targetId = selectedUser?.id ?? rawDiscordId;
+    let target = selectedUser;
+    if (!target && targetId) {
+      target = await interaction.client.users.fetch(targetId).catch(() => null);
     }
 
     await interaction.deferReply();
 
     try {
       const lookup = await lookupDiscordToRoblox({
-        query: target.id,
+        query: targetId,
         guildId: interaction.guildId,
       });
       const association = lookup?.association ?? null;
@@ -52,14 +71,17 @@ export const dc2robloxCommand = {
           .setDescription(
             association?.conflict
               ? "Configured providers returned different Roblox identities, so no match is being shown."
-              : "No configured provider returned an explicit verified Roblox association for this server member.",
+              : "No configured provider returned an explicit verified Roblox association for this Discord user.",
           )
           .addFields({
             name: "Providers checked",
             value: truncate(formatDiagnostics(diagnostics), 1000),
             inline: false,
-          })
-          .setThumbnail(target.displayAvatarURL({ size: 256 }));
+          });
+
+        if (target) {
+          embed.setThumbnail(target.displayAvatarURL({ size: 256 }));
+        }
 
         await interaction.editReply({ embeds: [embed] });
         return;
@@ -84,16 +106,19 @@ export const dc2robloxCommand = {
       const profile = robloxId
         ? `https://www.roblox.com/users/${robloxId}/profile`
         : null;
+      const discordLabel = target
+        ? target.globalName
+          ? `${target.globalName} (@${target.username}) · ID ${target.id}`
+          : `@${target.username} · ID ${target.id}`
+        : `Discord user ID ${targetId}`;
 
       const embed = new EmbedBuilder()
         .setColor(0x5865f2)
         .setTitle("Verified Discord → Roblox link")
         .addFields(
           {
-            name: "Discord member",
-            value: target.globalName
-              ? `${target.globalName} (@${target.username}) · ID ${target.id}`
-              : `@${target.username} · ID ${target.id}`,
+            name: "Discord user",
+            value: discordLabel,
             inline: false,
           },
           {
