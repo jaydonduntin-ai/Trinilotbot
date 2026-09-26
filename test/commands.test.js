@@ -9,7 +9,6 @@ test("manual slash commands are registered", () => {
     "rbx2mm2",
     "rbx2adm",
     "dev",
-    "dc2roblox",
     "rbx2dc",
   ]);
 
@@ -21,7 +20,7 @@ test("manual slash commands are registered", () => {
   }
 });
 
-test("/rbx2mm2 has no RAP threshold option", () => {
+test("/rbx2mm2 uses a fixed 5K+ RAP threshold", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "rbx2mm2",
   );
@@ -31,7 +30,7 @@ test("/rbx2mm2 has no RAP threshold option", () => {
   );
 
   assert.equal(minRap, undefined);
-  assert.match(definition.description, /no RAP minimum/i);
+  assert.match(definition.description, /Murder Mystery 2/i);
 });
 
 test("/rbx2mm2 has no fixed result-count option", () => {
@@ -68,35 +67,24 @@ test("/rbx2dc accepts a Roblox identifier and uses verified links", () => {
   assert.match(definition.description, /verified public Roblox-to-Discord/i);
 });
 
-test("/dev requires active creator evidence instead of RAP/value", () => {
+test("/dev requires RAP and visit thresholds", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "dev",
   );
   const definition = command.definition.toJSON();
   const optionNames = (definition.options ?? []).map((option) => option.name);
 
-  assert.deepEqual(optionNames, ["limit", "min_players"]);
-  assert.match(definition.description, /active Roblox experiences/i);
+  assert.deepEqual(optionNames, ["limit", "min_rap", "min_visits"]);
+  assert.match(definition.description, /5K\+ RAP/i);
 
-  const minPlayers = definition.options?.find(
-    (option) => option.name === "min_players",
+  const minRap = definition.options?.find(
+    (option) => option.name === "min_rap",
   );
-  assert.equal(minPlayers?.min_value, 1);
-  assert.equal(minPlayers?.max_value, 1_000_000);
-});
-
-test("/dc2roblox accepts a server user or arbitrary Discord user ID", () => {
-  const command = commandModules.find(
-    (candidate) => candidate.definition.name === "dc2roblox",
+  const minVisits = definition.options?.find(
+    (option) => option.name === "min_visits",
   );
-  const definition = command.definition.toJSON();
-  const optionNames = (definition.options ?? []).map((option) => option.name);
-
-  assert.deepEqual(optionNames, ["member", "discord_id"]);
-  assert.equal(definition.options?.[0]?.required, false);
-  assert.equal(definition.options?.[1]?.required, false);
-  assert.equal(definition.options?.[1]?.min_length, 17);
-  assert.equal(definition.options?.[1]?.max_length, 20);
+  assert.equal(minRap?.min_value, 5_000);
+  assert.equal(minVisits?.min_value, 100_000);
 });
 
 test("Discord command and option descriptions stay within 100 characters", () => {
