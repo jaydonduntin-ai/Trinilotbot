@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --import ./src/roblox/fetch-gate.js src/index.js",
+    "start": "node --import ./src/roblox/fetch-gate.js --import ./src/monitoring/command-telemetry-bootstrap.js src/index.js",
     "test": "node --test test/*.test.js",
     "check": "node scripts/check-project.js"
   },
