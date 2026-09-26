@@ -7,8 +7,11 @@ import {
   MAX_TARGET_THRESHOLD,
   scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
+import { lookupRobloxToDiscord } from "../sources/associations.js";
 
 const TARGET_DEFAULT_LIMIT = 50;
+const TARGET_DEFAULT_MIN_RAP = 5_000;
+const DISCORD_LOOKUP_CONCURRENCY = 4;
 
 export const targetsCommand = {
   definition: new SlashCommandBuilder()
@@ -43,7 +46,7 @@ export const targetsCommand = {
 
     // /target qualifies by RAP only. Value is informational when available.
     const minimumValue = null;
-    const minimumRap = minimumRapOption ?? DEFAULT_TARGET_RAP;
+    const minimumRap = minimumRapOption ?? TARGET_DEFAULT_MIN_RAP;
 
     await interaction.deferReply();
 
@@ -54,7 +57,13 @@ export const targetsCommand = {
         limit,
       });
       result.players = result.players ?? [];
+      result.players = await requireDiscordAssociations(
+        result.players,
+        interaction.guildId,
+        interaction.client,
+      );
       result.requestedLimit = limit;
+      result.discordVerifiedCount = result.players.length;
 
       console.info(
         `/target diagnostic: pool=${result.candidatePoolSize ?? 0} · candidates=${result.candidateCount ?? 0} · presenceChecked=${result.presenceScannedCount ?? 0} · inGame=${result.activeCount ?? 0} · prePublicVerified=${result.preRecheckVerifiedCount ?? 0} · publicJoinable=${result.players.length} · hiddenNonPublic=${result.nonPublicServerCount ?? 0} · publicVerifyErrors=${result.publicServerVerificationErrorCount ?? 0} · rateLimited=${result.presenceRateLimited === true}`,
@@ -117,7 +126,7 @@ function buildTargetEmbeds(result) {
               : "Presence mode: fresh",
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
-        `Requested: ${result.requestedLimit ?? result.players.length} · Returned: ${result.players.length}`,
+        `Requested: ${result.requestedLimit ?? result.players.length} · Discord-verified returned: ${result.players.length}`,
         formatGameCoverageSummary(result.players),
         `Public-joinable returned: ${result.joinReadyCount ?? 0} · Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
         `Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
@@ -162,6 +171,10 @@ function buildTargetEmbeds(result) {
             .join("\n")
         : "Unavailable";
 
+    const discord = player.discordAssociation
+      ? formatDiscordAssociation(player.discordAssociation)
+      : "Unavailable";
+
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle(`${player.displayName} (@${player.username})`)
@@ -173,6 +186,7 @@ function buildTargetEmbeds(result) {
         { name: "RAP", value: rap, inline: true },
         { name: "Value", value, inline: true },
         { name: "Presence", value: player.presenceStatus, inline: true },
+        { name: "Discord", value: discord, inline: false },
         {
           name: "Current game",
           value: player.gameName ?? "Unavailable",
@@ -302,4 +316,55 @@ function truncate(value, max) {
 
 function escapeMarkdown(value) {
   return String(value).replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
+}
+
+
+async function requireDiscordAssociations(players, guildId, client) {
+  const input = Array.isArray(players) ? players : [];
+  const output = [];
+  let cursor = 0;
+  async function worker() {
+    while (cursor < input.length) {
+      const index = cursor++;
+      const player = input[index];
+      const lookup = await lookupRobloxToDiscord({
+        userId: player?.id ?? player?.userId,
+        username: player?.username,
+        guildId,
+      }).catch(() => null);
+      const association = lookup?.association ?? null;
+      if (!association || association.conflict) continue;
+      const discordId = association.discordId ?? association.discordIds?.[0] ?? null;
+      const discordUser = discordId
+        ? await client.users.fetch(discordId, { force: false }).catch(() => null)
+        : null;
+      output.push({
+        ...player,
+        discordAssociation: {
+          ...association,
+          discordId,
+          discordUsername: discordUser?.username ?? association.discordUsername ?? null,
+          discordGlobalName: discordUser?.globalName ?? association.discordGlobalName ?? null,
+        },
+      });
+    }
+  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(DISCORD_LOOKUP_CONCURRENCY, Math.max(1, input.length)) },
+      () => worker(),
+    ),
+  );
+  return output;
+}
+
+function formatDiscordAssociation(association) {
+  const label = association.discordGlobalName
+    ? `${association.discordGlobalName}${association.discordUsername ? ` (@${association.discordUsername})` : ""}`
+    : association.discordUsername
+      ? `@${association.discordUsername}`
+      : association.discordId
+        ? `<@${association.discordId}>`
+        : "Verified Discord";
+  return `${label}\nSource: ${association.source ?? "Verified association source"}`;
 }
