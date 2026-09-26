@@ -58,9 +58,9 @@ function createGameTargetCommand({
           option
             .setName("min_rap")
             .setDescription(
-              `Minimum Roblox RAP, default 2,000.`,
+              `Minimum Roblox RAP, default 5,000.`,
             )
-            .setMinValue(2_000)
+            .setMinValue(5_000)
             .setMaxValue(2_000_000_000),
         );
       }
@@ -103,7 +103,7 @@ function createGameTargetCommand({
               })
             : gameKey === "adopt-me"
               ? await scanAdoptMeRapActivity({
-                  minimumRap: minimumRap ?? 2_000,
+                  minimumRap: minimumRap ?? 5_000,
                   limit,
                 })
               : await scanGameTargets({
