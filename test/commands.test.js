@@ -4,7 +4,14 @@ import { commandModules } from "../src/commands/index.js";
 
 test("manual slash commands are registered", () => {
   const names = commandModules.map((command) => command.definition.name);
-  assert.deepEqual(names, ["target", "rbx2mm2", "dev", "dc2roblox"]);
+  assert.deepEqual(names, [
+    "target",
+    "rbx2mm2",
+    "rbx2adm",
+    "dev",
+    "dc2roblox",
+    "rbx2dc",
+  ]);
 
   for (const command of commandModules) {
     const definition = command.definition.toJSON();
@@ -36,6 +43,29 @@ test("/rbx2mm2 has no fixed result-count option", () => {
 
   assert.equal(limit, undefined);
   assert.match(definition.description, /Murder Mystery 2/i);
+});
+
+test("/rbx2adm is registered for Adopt Me discovery", () => {
+  const command = commandModules.find(
+    (candidate) => candidate.definition.name === "rbx2adm",
+  );
+  const definition = command.definition.toJSON();
+  const optionNames = (definition.options ?? []).map((option) => option.name);
+
+  assert.deepEqual(optionNames, ["min_rap", "limit"]);
+  assert.match(definition.description, /Adopt Me/i);
+});
+
+test("/rbx2dc accepts a Roblox identifier and uses verified links", () => {
+  const command = commandModules.find(
+    (candidate) => candidate.definition.name === "rbx2dc",
+  );
+  const definition = command.definition.toJSON();
+
+  assert.equal(definition.options?.length, 1);
+  assert.equal(definition.options?.[0]?.name, "username");
+  assert.equal(definition.options?.[0]?.required, true);
+  assert.match(definition.description, /verified public Roblox-to-Discord/i);
 });
 
 test("/dev requires active creator evidence instead of RAP/value", () => {
