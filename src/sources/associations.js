@@ -496,7 +496,8 @@ function normalizeAssociationRowsToDiscord(payload, requested) {
         row?.username,
     );
 
-    if (requestedId && rowRobloxId && rowRobloxId !== requestedId) {
+    // A matching username alone does not establish account ownership.
+    if (!requestedId || rowRobloxId !== requestedId) {
       return false;
     }
     if (

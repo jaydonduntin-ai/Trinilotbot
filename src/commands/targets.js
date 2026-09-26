@@ -1,9 +1,6 @@
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
-  DEFAULT_TARGET_COUNT,
-  DEFAULT_TARGET_RAP,
   MAX_TARGETS,
-  MIN_TARGET_THRESHOLD,
   MAX_TARGET_THRESHOLD,
   scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
@@ -23,9 +20,9 @@ export const targetsCommand = {
       option
         .setName("min_rap")
         .setDescription(
-          `RAP floor: ${MIN_TARGET_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEFAULT_TARGET_RAP.toLocaleString()}.`,
+          `RAP floor: ${TARGET_DEFAULT_MIN_RAP.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${TARGET_DEFAULT_MIN_RAP.toLocaleString()}.`,
         )
-        .setMinValue(MIN_TARGET_THRESHOLD)
+        .setMinValue(TARGET_DEFAULT_MIN_RAP)
         .setMaxValue(MAX_TARGET_THRESHOLD),
     )
     .addIntegerOption((option) =>
@@ -115,7 +112,7 @@ function buildTargetEmbeds(result) {
     .setTitle("Automatic Roblox discovery")
     .setDescription(
       [
-        `Verified ${Number(result.minimumRap ?? DEFAULT_TARGET_RAP).toLocaleString()}+ RAP index: ${result.verifiedIndexCount ?? 0}`,
+        `Verified ${Number(result.minimumRap ?? TARGET_DEFAULT_MIN_RAP).toLocaleString()}+ RAP index: ${result.verifiedIndexCount ?? 0}`,
         `Live cache: ${result.liveCacheSize ?? 0} · Cache hit: ${result.liveCacheHit ? "Yes" : "No"}`,
         result.usedCachedPresenceFallback
           ? "Presence mode: recent cache (Roblox rate-limited)"
@@ -333,8 +330,9 @@ async function requireDiscordAssociations(players, guildId, client) {
         guildId,
       }).catch(() => null);
       const association = lookup?.association ?? null;
-      if (!association || association.conflict) continue;
+      if (!association?.verified || association.conflict) continue;
       const discordId = association.discordId ?? association.discordIds?.[0] ?? null;
+      if (!/^\d{17,20}$/.test(String(discordId ?? ""))) continue;
       const discordUser = discordId
         ? await client.users.fetch(discordId, { force: false }).catch(() => null)
         : null;
