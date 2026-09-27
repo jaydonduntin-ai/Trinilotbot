@@ -16,10 +16,10 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
 
   // Start independent provider requests together; each has its own timeout.
   const bloxlinkPromise = lookupBloxlinkRobloxToDiscord({ userId, guildId });
-  const profilePromise = lookupPublicRobloxProfile({ userId }).catch((error) => {
-    console.warn("Public Roblox profile lookup failed:", error);
-    return null;
-  });
+  const profilePromise = lookupPublicRobloxProfile({ userId }).then(
+    (association) => ({ association, error: null }),
+    (error) => ({ association: null, error }),
+  );
   const customPromise = template
     ? fetchAssociationSource(template, {
         robloxId: userId,
@@ -51,8 +51,13 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
   });
   if (bloxlink) results.push(bloxlink);
 
-  const profile = await profilePromise;
-  recordProvider(diagnostics, "Roblox profile", profile ? "matched" : "no-match");
+  const { association: profile, error: profileError } = await profilePromise;
+  recordProvider(
+    diagnostics,
+    "Roblox profile",
+    profileError ? "error" : profile ? "matched" : "no-match",
+    profileError ? Number(profileError.status) || profileError.name || "unavailable" : null,
+  );
   if (profile) results.push(profile);
 
   const roverConfigured = false;
@@ -104,7 +109,8 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
 async function lookupPublicRobloxProfile({ userId }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) return null;
-  const profile = await fetchJson(`https://users.roblox.com/v1/users/${id}`);
+  // A slow profile endpoint must not consume the whole interactive scan.
+  const profile = await fetchJson(`https://users.roblox.com/v1/users/${id}`, {}, 2_500);
   if (String(profile?.id) !== id) return null;
 
   // Only an explicit Discord account URL on the account-controlled Roblox
@@ -392,13 +398,13 @@ async function fetchAssociationSource(template, parameters) {
   return fetchJson(url);
 }
 
-async function fetchJson(url, extraHeaders = {}) {
+async function fetchJson(url, extraHeaders = {}, timeoutMs = SOURCE_TIMEOUT_MS) {
   const response = await fetch(url, {
     headers: {
       Accept: "application/json",
       ...extraHeaders,
     },
-    signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {

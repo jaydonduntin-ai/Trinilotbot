@@ -180,3 +180,36 @@ test("public Roblox profile requires an explicit Discord account URL", async () 
     restoreEnv("ROBLOX_TO_DISCORD_SOURCE_URL", previous.sourceUrl);
   }
 });
+
+test("profile timeout is reported without hiding a verified provider result", async () => {
+  const originalFetch = globalThis.fetch;
+  const previous = {
+    bloxlink: process.env.BLOXLINK_API_KEY,
+    sourceUrl: process.env.ROBLOX_TO_DISCORD_SOURCE_URL,
+  };
+  delete process.env.BLOXLINK_API_KEY;
+  process.env.ROBLOX_TO_DISCORD_SOURCE_URL = "https://assoc.test/get-discord";
+  globalThis.fetch = async (url) => {
+    if (String(url).startsWith("https://users.roblox.com/")) {
+      throw new DOMException("timed out", "TimeoutError");
+    }
+    return jsonResponse({
+      verified: true,
+      roblox: { id: 42, username: "example" },
+      discord: { id: "123456789012345678" },
+    });
+  };
+  try {
+    const result = await lookupRobloxToDiscord({ userId: 42, username: "example" });
+    assert.equal(result.association.discordId, "123456789012345678");
+    assert.deepEqual(result.diagnostics.find((item) => item.provider === "Roblox profile"), {
+      provider: "Roblox profile",
+      status: "error",
+      detail: "TimeoutError",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("BLOXLINK_API_KEY", previous.bloxlink);
+    restoreEnv("ROBLOX_TO_DISCORD_SOURCE_URL", previous.sourceUrl);
+  }
+});

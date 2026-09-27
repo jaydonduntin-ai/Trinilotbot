@@ -75,7 +75,7 @@ export const targetsCommand = {
               : `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}.`
           : result.presenceRateLimited && !result.presenceFallbackUsed
             ? "Roblox is rate-limiting live presence checks right now, and no usable fallback/cache result was available for this pass."
-            : `No currently in-game public profile matching ${formatThresholds(result)} was verified in this discovery pass.`;
+            : `No result passed all required checks for ${formatThresholds(result)} in this pass. ${result.activeCount ?? 0} candidates were seen in-game; a verified Discord association and public joinability are still required.`;
 
       await interaction.editReply({
         content,
@@ -120,7 +120,7 @@ function buildTargetEmbeds(result) {
               ? "Presence mode: rate-limited"
               : "Presence mode: fresh",
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
-        `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
+        `In-game seen: ${result.activeCount ?? 0} · Fully qualified live: ${result.verifiedCount ?? 0}`,
         `Requested: ${result.requestedLimit ?? result.players.length} · Discord-verified returned: ${result.players.length}`,
         formatGameCoverageSummary(result.players),
         `Public-joinable returned: ${result.joinReadyCount ?? 0} · Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
