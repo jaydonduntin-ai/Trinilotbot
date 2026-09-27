@@ -8,17 +8,24 @@ const MAX_CACHE_ENTRIES = 10_000;
 // One lookup per account per command invocation, including negative results.
 export function createTargetAssociationQualifier({ guildId, client, lookup = lookupRobloxToDiscord }) {
   const pending = new Map();
-  return async (player) => {
+  const stats = { checked: 0, verified: 0, noMatch: 0, providerErrors: 0, conflicts: 0, cacheHits: 0 };
+  const qualify = async (player) => {
     const id = Number(player?.id ?? player?.userId);
     if (!Number.isInteger(id) || id <= 0) return null;
     if (!pending.has(id)) {
       const cacheKey = `${guildId ?? "public"}:${id}`;
       const cached = lookup === lookupRobloxToDiscord ? associationCache.get(cacheKey) : null;
+      if (cached && cached.expiresAt > Date.now()) stats.cacheHits++;
       const lookupPromise = cached && cached.expiresAt > Date.now()
         ? Promise.resolve(cached.association)
         : lookup({ userId: id, username: player.username, guildId })
           .then((result) => {
             const association = result?.association ?? null;
+            stats.checked++;
+            if (association?.conflict) stats.conflicts++;
+            else if (association?.verified) stats.verified++;
+            else if (result?.diagnostics?.some((entry) => entry.status === "error")) stats.providerErrors++;
+            else stats.noMatch++;
             if (lookup === lookupRobloxToDiscord) {
               associationCache.set(cacheKey, {
                 association,
@@ -29,6 +36,10 @@ export function createTargetAssociationQualifier({ guildId, client, lookup = loo
               }
             }
             return association;
+          }).catch((error) => {
+            stats.checked++;
+            stats.providerErrors++;
+            throw error;
           });
       pending.set(id, lookupPromise
         .then(async (association) => {
@@ -47,4 +58,6 @@ export function createTargetAssociationQualifier({ guildId, client, lookup = loo
     const association = await pending.get(id);
     return association ? { ...player, discordAssociation: association } : null;
   };
+  qualify.stats = stats;
+  return qualify;
 }
