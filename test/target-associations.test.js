@@ -34,4 +34,18 @@ test("target association qualifies a traceable ID and caches the lookup", async 
   assert.equal(calls, 1);
   assert.equal(first.discordAssociation.discordUsername, "linked");
   assert.equal(second.discordAssociation.source, "Bloxlink");
+  assert.deepEqual(qualify.stats, { checked: 1, verified: 1, noMatch: 0, providerErrors: 0, conflicts: 0, cacheHits: 0 });
+});
+
+test("target association diagnostics distinguish no match from provider failure", async () => {
+  const qualify = createTargetAssociationQualifier({
+    client,
+    lookup: async ({ userId }) => userId === 123
+      ? { association: null, diagnostics: [{ status: "not-found" }] }
+      : { association: null, diagnostics: [{ status: "error" }] },
+  });
+  assert.equal(await qualify(player), null);
+  assert.equal(await qualify({ ...player, id: 456 }), null);
+  assert.equal(await qualify(player), null);
+  assert.deepEqual(qualify.stats, { checked: 2, verified: 0, noMatch: 1, providerErrors: 1, conflicts: 0, cacheHits: 0 });
 });
