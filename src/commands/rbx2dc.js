@@ -56,12 +56,32 @@ export const rbx2dcCommand = {
         console.warn("Roblox-to-Discord verified source failed:", sourceError);
       }
 
+      if (association?.conflict) {
+        const conflictEmbed = new EmbedBuilder()
+          .setColor(0xfee75c)
+          .setTitle("Conflicting verified-source results")
+          .setDescription(
+            "Configured providers returned different Discord identities, so no account is being presented as the match.",
+          )
+          .addFields({
+            name: "Providers checked",
+            value: truncate(formatProviderDiagnostics(providerDiagnostics), 1000),
+            inline: false,
+          });
+
+        await interaction.editReply({ embeds: [conflictEmbed] });
+        return;
+      }
+
       if (!association?.verified || !/^\d{17,20}$/.test(String(association.discordId ?? association.discordIds?.[0] ?? ""))) {
+        const providerFailed = providerDiagnostics.some((entry) => entry.status === "error");
         const noMatchEmbed = new EmbedBuilder()
           .setColor(0x2f3136)
-          .setTitle("No verified Roblox → Discord link found")
+          .setTitle(providerFailed ? "Verification source unavailable" : "No verified Roblox → Discord link found")
           .setDescription(
-            "No configured source returned an explicit verified association for this Roblox account.",
+            providerFailed
+              ? "One or more association providers failed. No verified link was returned by the providers that did respond. Try again later."
+              : "No configured source returned an explicit verified association for this Roblox account. Bloxlink server lookup covers verified members of this Discord server, not all Roblox players.",
           )
           .addFields(
             {
@@ -80,23 +100,6 @@ export const rbx2dcCommand = {
           });
 
         await interaction.editReply({ embeds: [noMatchEmbed] });
-        return;
-      }
-
-      if (association.conflict) {
-        const conflictEmbed = new EmbedBuilder()
-          .setColor(0xfee75c)
-          .setTitle("Conflicting verified-source results")
-          .setDescription(
-            "Configured providers returned different Discord identities, so no account is being presented as the match.",
-          )
-          .addFields({
-            name: "Providers checked",
-            value: truncate(formatProviderDiagnostics(providerDiagnostics), 1000),
-            inline: false,
-          });
-
-        await interaction.editReply({ embeds: [conflictEmbed] });
         return;
       }
 
