@@ -213,3 +213,35 @@ test("profile timeout is reported without hiding a verified provider result", as
     restoreEnv("ROBLOX_TO_DISCORD_SOURCE_URL", previous.sourceUrl);
   }
 });
+
+test("Bloxlink guild reverse lookup returns verified IDs and reports authorization failure", async () => {
+  const originalFetch = globalThis.fetch;
+  const previous = {
+    bloxlink: process.env.BLOXLINK_API_KEY,
+    guild: process.env.BLOXLINK_USE_GUILD_LOOKUPS,
+    sourceUrl: process.env.ROBLOX_TO_DISCORD_SOURCE_URL,
+  };
+  process.env.BLOXLINK_API_KEY = "test-key";
+  process.env.BLOXLINK_USE_GUILD_LOOKUPS = "true";
+  delete process.env.ROBLOX_TO_DISCORD_SOURCE_URL;
+  try {
+    globalThis.fetch = async (url) => String(url).startsWith("https://users.roblox.com/")
+      ? jsonResponse({ id: 42, description: "" })
+      : jsonResponse({ discordIDs: ["123456789012345678"] });
+    const match = await lookupRobloxToDiscord({ userId: 42, guildId: "123456789012345678" });
+    assert.equal(match.association.discordId, "123456789012345678");
+    assert.equal(match.diagnostics.find((entry) => entry.provider === "Bloxlink").status, "matched");
+
+    globalThis.fetch = async (url) => String(url).startsWith("https://users.roblox.com/")
+      ? jsonResponse({ id: 42, description: "" })
+      : new Response("unauthorized", { status: 401 });
+    const denied = await lookupRobloxToDiscord({ userId: 42, guildId: "123456789012345678" });
+    assert.equal(denied.association, null);
+    assert.equal(denied.diagnostics.find((entry) => entry.provider === "Bloxlink").status, "error");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("BLOXLINK_API_KEY", previous.bloxlink);
+    restoreEnv("BLOXLINK_USE_GUILD_LOOKUPS", previous.guild);
+    restoreEnv("ROBLOX_TO_DISCORD_SOURCE_URL", previous.sourceUrl);
+  }
+});

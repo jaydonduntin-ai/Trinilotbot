@@ -15,6 +15,7 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
   const template = process.env.ROBLOX_TO_DISCORD_SOURCE_URL;
 
   // Start independent provider requests together; each has its own timeout.
+  const bloxlinkConfigured = Boolean(process.env.BLOXLINK_API_KEY?.trim());
   const bloxlinkPromise = lookupBloxlinkRobloxToDiscord({ userId, guildId });
   const profilePromise = lookupPublicRobloxProfile({ userId }).then(
     (association) => ({ association, error: null }),
@@ -36,7 +37,7 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
     recordProvider(
       diagnostics,
       "Bloxlink",
-      result ? "matched" : "no-match",
+      result ? "matched" : bloxlinkConfigured ? "no-match" : "not-configured",
     );
     return result;
   }).catch((error) => {
@@ -241,14 +242,13 @@ async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
   if (useGuild) {
     urls.push(
       `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/roblox-to-discord/${encodeURIComponent(userId)}`,
-      `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/roblox/${encodeURIComponent(userId)}`,
     );
   }
   urls.push(
     `${BLOXLINK_BASE_URL}/public/roblox-to-discord/${encodeURIComponent(userId)}`,
-    `${BLOXLINK_BASE_URL}/public/roblox/${encodeURIComponent(userId)}`,
   );
 
+  let providerError = null;
   for (const url of [...new Set(urls)]) {
     try {
       const payload = await fetchJson(url, { Authorization: apiKey });
@@ -269,13 +269,14 @@ async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
             .map(String),
         ),
       ];
-      if (ids.length === 0) continue;
+      const validIds = ids.filter((id) => /^\d{17,20}$/.test(id));
+      if (validIds.length === 0) continue;
 
       return {
         verified: true,
         source: "Bloxlink",
-        discordId: ids[0],
-        discordIds: ids,
+        discordId: validIds[0],
+        discordIds: validIds,
         discordUsername: toOptionalString(
           payload?.discordUsername ??
             payload?.discord?.username ??
@@ -288,8 +289,12 @@ async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
       };
     } catch (error) {
       const status = Number(error?.status);
-      if (status === 401 || status === 403) continue;
+      if (status === 401 || status === 403 || status === 429) {
+        providerError = error;
+        break;
+      }
       if (status !== 404) {
+        providerError = error;
         console.warn(
           `Bloxlink Roblox-to-Discord endpoint failed (${url}):`,
           error,
@@ -298,6 +303,7 @@ async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
     }
   }
 
+  if (providerError) throw providerError;
   return null;
 }
 
