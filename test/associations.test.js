@@ -33,6 +33,7 @@ test("custom association source accepts cached get-discord result rows", async (
   process.env.ROBLOX_ASSOCIATION_API_KEY = "secret-test-key";
 
   globalThis.fetch = async (url) => {
+    if (String(url).startsWith("https://users.roblox.com/")) return jsonResponse({ id: 24739880, description: "" });
     assert.match(String(url), /api_key=secret-test-key/);
     assert.match(String(url), /username=devclockwrks/);
     return jsonResponse({
@@ -63,12 +64,9 @@ test("custom association source accepts cached get-discord result rows", async (
       username: "devclockwrks",
       guildId: null,
     });
-    assert.deepEqual(result.association.discordIds, [
-      "261173921657782273",
-      "143804501852291072",
-    ]);
+    assert.deepEqual(result.association.discordIds, ["143804501852291072"]);
     assert.match(result.association.source, /RoVer/);
-    assert.equal(result.association.conflict, true);
+    assert.equal(result.association.conflict, false);
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv("BLOXLINK_API_KEY", previous.bloxlink);
@@ -127,5 +125,58 @@ test("custom association source accepts cached Discord-to-Roblox result rows", a
     restoreEnv("DISCORD_TO_ROBLOX_SOURCE_URL", previous.sourceUrl);
     restoreEnv("ROBLOX_ASSOCIATION_SOURCE_NAME", previous.sourceName);
     restoreEnv("ROBLOX_ASSOCIATION_API_KEY", previous.apiKey);
+  }
+});
+
+test("Roblox-to-Discord lookup rejects username-only cached associations", async () => {
+  const originalFetch = globalThis.fetch;
+  const previous = {
+    bloxlink: process.env.BLOXLINK_API_KEY,
+    sourceUrl: process.env.ROBLOX_TO_DISCORD_SOURCE_URL,
+  };
+  delete process.env.BLOXLINK_API_KEY;
+  process.env.ROBLOX_TO_DISCORD_SOURCE_URL = "https://assoc.test/get-discord";
+  globalThis.fetch = async (url) => String(url).startsWith("https://users.roblox.com/")
+    ? jsonResponse({ id: 42, description: "" })
+    : jsonResponse({
+    success: true,
+    found: true,
+    results: [{ discord_id: "123456789012345678", roblox_username: "example", source: "rover" }],
+  });
+  try {
+    const result = await lookupRobloxToDiscord({ userId: 42, username: "example" });
+    assert.equal(result.association, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("BLOXLINK_API_KEY", previous.bloxlink);
+    restoreEnv("ROBLOX_TO_DISCORD_SOURCE_URL", previous.sourceUrl);
+  }
+});
+
+test("public Roblox profile requires an explicit Discord account URL", async () => {
+  const originalFetch = globalThis.fetch;
+  const previous = {
+    bloxlink: process.env.BLOXLINK_API_KEY,
+    sourceUrl: process.env.ROBLOX_TO_DISCORD_SOURCE_URL,
+  };
+  delete process.env.BLOXLINK_API_KEY;
+  delete process.env.ROBLOX_TO_DISCORD_SOURCE_URL;
+  try {
+    for (const [description, expected] of [
+      ["My Discord: https://discord.com/users/123456789012345678", "123456789012345678"],
+      ["Discord username same as Roblox; discord.gg/example", null],
+      ["https://discord.com/users/123456789012345678 and https://discord.com/users/223456789012345678", "conflict"],
+    ]) {
+      globalThis.fetch = async () => jsonResponse({ id: 42, description });
+      const result = await lookupRobloxToDiscord({ userId: 42, username: "example" });
+      assert.equal(result.association?.conflict ? "conflict" : result.association?.discordId ?? null, expected);
+      if (expected === "123456789012345678") {
+        assert.equal(result.association.evidenceUrl, "https://www.roblox.com/users/42/profile");
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("BLOXLINK_API_KEY", previous.bloxlink);
+    restoreEnv("ROBLOX_TO_DISCORD_SOURCE_URL", previous.sourceUrl);
   }
 });

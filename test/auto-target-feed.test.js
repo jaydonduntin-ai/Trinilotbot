@@ -32,13 +32,13 @@ test("background candidate-pool warmup remains enabled", async () => {
   assert.match(source, /startTargetCandidatePoolWarmup/);
 });
 
-test("rbx2mm2 invokes the scanner with no RAP minimum", async () => {
+test("rbx2mm2 invokes the scanner with a 5K RAP minimum", async () => {
   const source = await readFile(
     new URL("../src/commands/rbx2mm2.js", import.meta.url),
     "utf8",
   );
 
-  assert.equal(source.includes("minimumRap: null"), true);
+  assert.equal(source.includes("minimumRap: 5_000"), true);
   assert.equal(source.includes('.setName("min_rap")'), false);
-  assert.match(source, /No RAP minimum/i);
+  assert.match(source, /5K\+ RAP minimum/i);
 });

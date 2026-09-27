@@ -12,11 +12,27 @@ function recordProvider(diag, provider, status, detail = null) {
 export async function lookupRobloxToDiscord({ userId, username, guildId = null }) {
   const results = [];
   const diagnostics = createProviderDiagnostics();
+  const template = process.env.ROBLOX_TO_DISCORD_SOURCE_URL;
 
-  const bloxlink = await lookupBloxlinkRobloxToDiscord({
-    userId,
-    guildId,
-  }).then((result) => {
+  // Start independent provider requests together; each has its own timeout.
+  const bloxlinkPromise = lookupBloxlinkRobloxToDiscord({ userId, guildId });
+  const profilePromise = lookupPublicRobloxProfile({ userId }).catch((error) => {
+    console.warn("Public Roblox profile lookup failed:", error);
+    return null;
+  });
+  const customPromise = template
+    ? fetchAssociationSource(template, {
+        robloxId: userId,
+        robloxUsername: username,
+        guildId: guildId ?? "",
+        apiKey: process.env.ROBLOX_ASSOCIATION_API_KEY ?? "",
+      }).catch((error) => {
+        console.warn("Configured Roblox-to-Discord source failed:", error);
+        return null;
+      })
+    : null;
+
+  const bloxlink = await bloxlinkPromise.then((result) => {
     recordProvider(
       diagnostics,
       "Bloxlink",
@@ -34,6 +50,10 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
     return null;
   });
   if (bloxlink) results.push(bloxlink);
+
+  const profile = await profilePromise;
+  recordProvider(diagnostics, "Roblox profile", profile ? "matched" : "no-match");
+  if (profile) results.push(profile);
 
   const roverConfigured = false;
   const rover = await lookupRoverRobloxToDiscord({ userId }).then((result) => {
@@ -55,17 +75,8 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
   });
   if (rover) results.push(rover);
 
-  const template = process.env.ROBLOX_TO_DISCORD_SOURCE_URL;
   if (template) {
-    const response = await fetchAssociationSource(template, {
-      robloxId: userId,
-      robloxUsername: username,
-      guildId: guildId ?? "",
-      apiKey: process.env.ROBLOX_ASSOCIATION_API_KEY ?? "",
-    }).catch((error) => {
-      console.warn("Configured Roblox-to-Discord source failed:", error);
-      return null;
-    });
+    const response = await customPromise;
     const normalized = response
       ? normalizeRobloxToDiscord(response, { userId, username })
       : null;
@@ -87,6 +98,28 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
   return {
     association: reconciled,
     diagnostics,
+  };
+}
+
+async function lookupPublicRobloxProfile({ userId }) {
+  const id = String(userId);
+  if (!/^\d+$/.test(id)) return null;
+  const profile = await fetchJson(`https://users.roblox.com/v1/users/${id}`);
+  if (String(profile?.id) !== id) return null;
+
+  // Only an explicit Discord account URL on the account-controlled Roblox
+  // profile identifies an account. Names, invites, and server links do not.
+  const description = String(profile?.description ?? "");
+  const ids = [...new Set([...description.matchAll(
+    /https?:\/\/(?:www\.)?(?:discord\.com|discordapp\.com)\/users\/(\d{17,20})(?!\d)/gi,
+  )].map((match) => match[1]))];
+  if (ids.length === 0) return null;
+  return {
+    verified: true,
+    source: "Public Roblox profile",
+    discordId: ids[0],
+    discordIds: ids,
+    evidenceUrl: `https://www.roblox.com/users/${id}/profile`,
   };
 }
 
@@ -195,14 +228,9 @@ async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
   if (!apiKey) return null;
 
   const useGuild = Boolean(
-    guildId && process.env.BLOXLINK_USE_GUILD_LOOKUPS === "true",
+    guildId && process.env.BLOXLINK_USE_GUILD_LOOKUPS !== "false",
   );
   const urls = [];
-
-  urls.push(
-    `${BLOXLINK_BASE_URL}/public/roblox-to-discord/${encodeURIComponent(userId)}`,
-    `${BLOXLINK_BASE_URL}/public/roblox/${encodeURIComponent(userId)}`,
-  );
 
   if (useGuild) {
     urls.push(
@@ -210,6 +238,10 @@ async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
       `${BLOXLINK_BASE_URL}/public/guilds/${encodeURIComponent(guildId)}/roblox/${encodeURIComponent(userId)}`,
     );
   }
+  urls.push(
+    `${BLOXLINK_BASE_URL}/public/roblox-to-discord/${encodeURIComponent(userId)}`,
+    `${BLOXLINK_BASE_URL}/public/roblox/${encodeURIComponent(userId)}`,
+  );
 
   for (const url of [...new Set(urls)]) {
     try {
@@ -250,7 +282,7 @@ async function lookupBloxlinkRobloxToDiscord({ userId, guildId }) {
       };
     } catch (error) {
       const status = Number(error?.status);
-      if (status === 401 || status === 403) throw error;
+      if (status === 401 || status === 403) continue;
       if (status !== 404) {
         console.warn(
           `Bloxlink Roblox-to-Discord endpoint failed (${url}):`,
@@ -394,10 +426,7 @@ function normalizeRobloxToDiscord(payload, requested) {
   }
 
   const roblox = payload.roblox ?? {};
-  if (
-    roblox.id !== undefined &&
-    String(roblox.id) !== String(requested.userId)
-  ) {
+  if (String(roblox.id ?? "") !== String(requested.userId)) {
     return null;
   }
   if (
@@ -412,7 +441,7 @@ function normalizeRobloxToDiscord(payload, requested) {
   const discordUsername = toOptionalString(
     payload.discord.username ?? payload.discord.name,
   );
-  if (!discordId && !discordUsername) {
+  if (!discordId || !/^\d{17,20}$/.test(discordId)) {
     return null;
   }
 
@@ -496,7 +525,8 @@ function normalizeAssociationRowsToDiscord(payload, requested) {
         row?.username,
     );
 
-    if (requestedId && rowRobloxId && rowRobloxId !== requestedId) {
+    // A matching username alone does not establish account ownership.
+    if (!requestedId || rowRobloxId !== requestedId) {
       return false;
     }
     if (
@@ -506,9 +536,8 @@ function normalizeAssociationRowsToDiscord(payload, requested) {
     ) {
       return false;
     }
-    return Boolean(
-      toOptionalString(row?.discord_id ?? row?.discordId ?? row?.discordID),
-    );
+    const discordId = toOptionalString(row?.discord_id ?? row?.discordId ?? row?.discordID);
+    return Boolean(discordId && /^\d{17,20}$/.test(discordId) && toOptionalString(row?.source));
   });
 
   const discordIds = [

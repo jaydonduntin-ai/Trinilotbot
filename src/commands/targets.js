@@ -1,14 +1,13 @@
 import { EmbedBuilder, SlashCommandBuilder } from "discord.js";
 import {
-  DEFAULT_TARGET_COUNT,
-  DEFAULT_TARGET_RAP,
   MAX_TARGETS,
-  MIN_TARGET_THRESHOLD,
   MAX_TARGET_THRESHOLD,
   scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
+import { createTargetAssociationQualifier } from "./target-associations.js";
 
 const TARGET_DEFAULT_LIMIT = 50;
+const TARGET_DEFAULT_MIN_RAP = 5_000;
 
 export const targetsCommand = {
   definition: new SlashCommandBuilder()
@@ -20,9 +19,9 @@ export const targetsCommand = {
       option
         .setName("min_rap")
         .setDescription(
-          `RAP floor: ${MIN_TARGET_THRESHOLD.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${DEFAULT_TARGET_RAP.toLocaleString()}.`,
+          `RAP floor: ${TARGET_DEFAULT_MIN_RAP.toLocaleString()}–${MAX_TARGET_THRESHOLD.toLocaleString()}; default ${TARGET_DEFAULT_MIN_RAP.toLocaleString()}.`,
         )
-        .setMinValue(MIN_TARGET_THRESHOLD)
+        .setMinValue(TARGET_DEFAULT_MIN_RAP)
         .setMaxValue(MAX_TARGET_THRESHOLD),
     )
     .addIntegerOption((option) =>
@@ -43,7 +42,7 @@ export const targetsCommand = {
 
     // /target qualifies by RAP only. Value is informational when available.
     const minimumValue = null;
-    const minimumRap = minimumRapOption ?? DEFAULT_TARGET_RAP;
+    const minimumRap = minimumRapOption ?? TARGET_DEFAULT_MIN_RAP;
 
     await interaction.deferReply();
 
@@ -52,9 +51,14 @@ export const targetsCommand = {
         minimumValue,
         minimumRap,
         limit,
+        qualifyPlayer: createTargetAssociationQualifier({
+          guildId: interaction.guildId,
+          client: interaction.client,
+        }),
       });
       result.players = result.players ?? [];
       result.requestedLimit = limit;
+      result.discordVerifiedCount = result.players.length;
 
       console.info(
         `/target diagnostic: pool=${result.candidatePoolSize ?? 0} · candidates=${result.candidateCount ?? 0} · presenceChecked=${result.presenceScannedCount ?? 0} · inGame=${result.activeCount ?? 0} · prePublicVerified=${result.preRecheckVerifiedCount ?? 0} · publicJoinable=${result.players.length} · hiddenNonPublic=${result.nonPublicServerCount ?? 0} · publicVerifyErrors=${result.publicServerVerificationErrorCount ?? 0} · rateLimited=${result.presenceRateLimited === true}`,
@@ -106,7 +110,7 @@ function buildTargetEmbeds(result) {
     .setTitle("Automatic Roblox discovery")
     .setDescription(
       [
-        `Verified ${Number(result.minimumRap ?? DEFAULT_TARGET_RAP).toLocaleString()}+ RAP index: ${result.verifiedIndexCount ?? 0}`,
+        `Verified ${Number(result.minimumRap ?? TARGET_DEFAULT_MIN_RAP).toLocaleString()}+ RAP index: ${result.verifiedIndexCount ?? 0}`,
         `Live cache: ${result.liveCacheSize ?? 0} · Cache hit: ${result.liveCacheHit ? "Yes" : "No"}`,
         result.usedCachedPresenceFallback
           ? "Presence mode: recent cache (Roblox rate-limited)"
@@ -117,7 +121,7 @@ function buildTargetEmbeds(result) {
               : "Presence mode: fresh",
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `In-game seen: ${result.activeCount ?? 0} · Verified live: ${result.verifiedCount ?? 0}`,
-        `Requested: ${result.requestedLimit ?? result.players.length} · Returned: ${result.players.length}`,
+        `Requested: ${result.requestedLimit ?? result.players.length} · Discord-verified returned: ${result.players.length}`,
         formatGameCoverageSummary(result.players),
         `Public-joinable returned: ${result.joinReadyCount ?? 0} · Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
         `Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
@@ -162,6 +166,10 @@ function buildTargetEmbeds(result) {
             .join("\n")
         : "Unavailable";
 
+    const discord = player.discordAssociation
+      ? formatDiscordAssociation(player.discordAssociation)
+      : "Unavailable";
+
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle(`${player.displayName} (@${player.username})`)
@@ -173,6 +181,7 @@ function buildTargetEmbeds(result) {
         { name: "RAP", value: rap, inline: true },
         { name: "Value", value, inline: true },
         { name: "Presence", value: player.presenceStatus, inline: true },
+        { name: "Discord", value: discord, inline: false },
         {
           name: "Current game",
           value: player.gameName ?? "Unavailable",
@@ -302,4 +311,17 @@ function truncate(value, max) {
 
 function escapeMarkdown(value) {
   return String(value).replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
+}
+
+
+function formatDiscordAssociation(association) {
+  const label = association.discordGlobalName
+    ? `${association.discordGlobalName}${association.discordUsername ? ` (@${association.discordUsername})` : ""}`
+    : association.discordUsername
+      ? `@${association.discordUsername}`
+      : association.discordId
+        ? `<@${association.discordId}>`
+        : "Verified Discord";
+  const evidence = association.evidenceUrl ? `\nEvidence: ${association.evidenceUrl}` : "";
+  return `${label}\nSource: ${association.source ?? "Verified association source"}${evidence}`;
 }

@@ -56,7 +56,7 @@ export const rbx2dcCommand = {
         console.warn("Roblox-to-Discord verified source failed:", sourceError);
       }
 
-      if (!association) {
+      if (!association?.verified || !/^\d{17,20}$/.test(String(association.discordId ?? association.discordIds?.[0] ?? ""))) {
         const noMatchEmbed = new EmbedBuilder()
           .setColor(0x2f3136)
           .setTitle("No verified Roblox → Discord link found")
@@ -137,6 +137,11 @@ export const rbx2dcCommand = {
             value: association.source ?? "Configured association source",
             inline: true,
           },
+          ...(association.evidenceUrl ? [{
+            name: "Public evidence",
+            value: truncate(association.evidenceUrl, 1000),
+            inline: false,
+          }] : []),
           {
             name: "Verification",
             value: association.corroborated

@@ -1,4 +1,3 @@
-import { dc2robloxCommand } from "./dc2roblox.js";
 import { devCommand } from "./dev.js";
 import { rbx2dcCommand } from "./rbx2dc.js";
 import { rbx2admCommand } from "./game-targets.js";
@@ -10,6 +9,5 @@ export const commandModules = [
   rbx2mm2Command,
   rbx2admCommand,
   devCommand,
-  dc2robloxCommand,
   rbx2dcCommand,
 ];
