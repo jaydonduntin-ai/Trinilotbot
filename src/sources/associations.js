@@ -16,6 +16,10 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
 
   // Start independent provider requests together; each has its own timeout.
   const bloxlinkPromise = lookupBloxlinkRobloxToDiscord({ userId, guildId });
+  const profilePromise = lookupPublicRobloxProfile({ userId }).catch((error) => {
+    console.warn("Public Roblox profile lookup failed:", error);
+    return null;
+  });
   const customPromise = template
     ? fetchAssociationSource(template, {
         robloxId: userId,
@@ -46,6 +50,10 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
     return null;
   });
   if (bloxlink) results.push(bloxlink);
+
+  const profile = await profilePromise;
+  recordProvider(diagnostics, "Roblox profile", profile ? "matched" : "no-match");
+  if (profile) results.push(profile);
 
   const roverConfigured = false;
   const rover = await lookupRoverRobloxToDiscord({ userId }).then((result) => {
@@ -90,6 +98,28 @@ export async function lookupRobloxToDiscord({ userId, username, guildId = null }
   return {
     association: reconciled,
     diagnostics,
+  };
+}
+
+async function lookupPublicRobloxProfile({ userId }) {
+  const id = String(userId);
+  if (!/^\d+$/.test(id)) return null;
+  const profile = await fetchJson(`https://users.roblox.com/v1/users/${id}`);
+  if (String(profile?.id) !== id) return null;
+
+  // Only an explicit Discord account URL on the account-controlled Roblox
+  // profile identifies an account. Names, invites, and server links do not.
+  const description = String(profile?.description ?? "");
+  const ids = [...new Set([...description.matchAll(
+    /https?:\/\/(?:www\.)?(?:discord\.com|discordapp\.com)\/users\/(\d{17,20})(?!\d)/gi,
+  )].map((match) => match[1]))];
+  if (ids.length === 0) return null;
+  return {
+    verified: true,
+    source: "Public Roblox profile",
+    discordId: ids[0],
+    discordIds: ids,
+    evidenceUrl: `https://www.roblox.com/users/${id}/profile`,
   };
 }
 
