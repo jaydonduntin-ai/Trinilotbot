@@ -131,7 +131,7 @@ async function scanMm2TargetSession() {
 function buildTargetEmbeds(result) {
   const summary = new EmbedBuilder()
     .setColor(result.players.length > 0 ? 0x57f287 : 0x2f3136)
-    .setTitle("Murder Mystery 2 · target scan")
+    .setTitle("Murder Mystery 2 · Rolimon's candidates")
     .setDescription(
       [
         `Candidate pool: ${Number(result.candidatePoolSize ?? 0).toLocaleString()}`,
@@ -148,11 +148,11 @@ function buildTargetEmbeds(result) {
     .addFields({
       name: "Discovery source",
       value:
-        "Same public candidate pool and live-verification model as /target, filtered to active Murder Mystery 2 sessions only.",
+        "Rolimon's-only candidates, filtered to players Roblox confirms are active in Murder Mystery 2.",
       inline: false,
     })
     .setFooter({
-      text: "/rbx2mm2 only displays players verified in Murder Mystery 2 with a public joinable server.",
+      text: "RAP comes from Rolimon's; Roblox verifies current game presence and public joinability.",
     })
     .setTimestamp();
 
