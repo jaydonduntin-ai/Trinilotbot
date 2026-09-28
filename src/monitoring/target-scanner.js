@@ -40,7 +40,10 @@ import { getPs99PublicCandidateUserIds } from "../sources/ps99-public-players.js
 import { getRolimonsLeaderboardPlayers } from "../sources/rolimons-leaderboard.js";
 import { searchRolimonsPlayers } from "../sources/rolimons-player-search.js";
 import { getRolimonsProfileUrl } from "../integrations/rolimons.js";
-import { hasRolimonsDiscoverySource, hasVerifiedRolimonsRap } from "./rolimons-qualification.js";
+import {
+  hasRolimonsDiscoverySource,
+  hasVerifiedRolimonsRap,
+} from "./rolimons-qualification.js";
 import { scanGameValue } from "../providers/game-value-providers.js";
 import { getRblxValueProfile } from "../providers/rblxvalue.js";
 import { getScanWatchlist } from "../storage/scan-watchlist.js";
@@ -798,7 +801,9 @@ function getFreshLiveCachePresences({
         requireRolimonsSource &&
         (!hasRolimonsDiscoverySource(candidate) ||
           !hasVerifiedRolimonsRap(candidate, minimumRap))
-      ) return false;
+      ) {
+        return false;
+      }
 
       if (
         minimumRap !== null &&
