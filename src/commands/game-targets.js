@@ -166,7 +166,7 @@ function buildGameTargetEmbeds(result) {
       [
         `Stored candidate pool: ${result.candidatePoolSize ?? 0}`,
         `Rolimon's candidates selected: ${result.candidateCount ?? 0}`,
-        `Candidates selected: ${result.candidateCount ?? 0}`,
+
         result.presenceScannedCount !== undefined
           ? `Presence checked: ${result.presenceScannedCount}`
           : null,

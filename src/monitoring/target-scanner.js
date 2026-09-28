@@ -1231,7 +1231,6 @@ async function scanDiscoveredTargetsInternal({
             minimumRap,
             includeGameValue: false,
             preferIndexedRap: true,
-
             requireRolimonsRap: true,
           }).catch((error) => {
             console.warn(
@@ -3367,7 +3366,7 @@ function buildMm2ValueScanResult({
     scanCursorStart,
     scanCursorNext,
     sources: [
-      "Rolimon's-only candidate discovery",
+      "SE TARG public candidate discovery pool",
       "Roblox public live presence",
       "Murder Mystery 2 universe/activity filter",
       "RBLXValue API v2 MM2 profile value",

@@ -43,3 +43,12 @@ test("rejects Rolimon's candidates below the configured RAP floor", () => {
   };
   assert.equal(qualifiesForRolimonsDiscovery(candidate), false);
 });
+
+test("rejects an empty RAP value even if its source is labeled Rolimon's", () => {
+  const candidate = {
+    sources: new Set(["Rolimon's player search"]),
+    lastKnownRap: null,
+    lastKnownRapSource: "Rolimon's public player info",
+  };
+  assert.equal(qualifiesForRolimonsDiscovery(candidate), false);
+});

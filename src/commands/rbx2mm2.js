@@ -134,8 +134,9 @@ function buildTargetEmbeds(result) {
     .setTitle("Murder Mystery 2 · Rolimon's candidates")
     .setDescription(
       [
-        `Candidate pool: ${Number(result.candidatePoolSize ?? 0).toLocaleString()}`,
-        `Candidates checked: ${Number(result.presenceScannedCount ?? 0).toLocaleString()}`,
+        `Stored candidate pool: ${Number(result.candidatePoolSize ?? 0).toLocaleString()}`,
+        `Rolimon's candidates checked: ${Number(result.candidateCount ?? 0).toLocaleString()}`,
+        `Presence checks: ${Number(result.presenceScannedCount ?? 0).toLocaleString()}`,
         `MM2 active seen: ${Number(result.gameActiveCount ?? 0).toLocaleString()}`,
         `Public-joinable returned: ${result.players.length}`,
         `Passes: ${result.passCount ?? 1}`,
