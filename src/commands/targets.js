@@ -4,7 +4,6 @@ import {
   MAX_TARGET_THRESHOLD,
   scanDiscoveredTargets,
 } from "../monitoring/target-scanner.js";
-import { createTargetAssociationQualifier } from "./target-associations.js";
 
 const TARGET_DEFAULT_LIMIT = 50;
 const TARGET_DEFAULT_MIN_RAP = 5_000;
@@ -47,23 +46,16 @@ export const targetsCommand = {
     await interaction.deferReply();
 
     try {
-      const qualifier = createTargetAssociationQualifier({
-        guildId: interaction.guildId,
-        client: interaction.client,
-      });
       const result = await scanDiscoveredTargets({
         minimumValue,
         minimumRap,
         limit,
-        qualifyPlayer: qualifier,
       });
-      result.associationStats = qualifier.stats;
       result.players = result.players ?? [];
       result.requestedLimit = limit;
-      result.discordVerifiedCount = result.players.length;
 
       console.info(
-        `/target diagnostic: pool=${result.candidatePoolSize ?? 0} · candidates=${result.candidateCount ?? 0} · presenceChecked=${result.presenceScannedCount ?? 0} · inGame=${result.activeCount ?? 0} · rapBelow=${result.belowRapCount ?? 0} · rapUnavailable=${result.rapUnavailableCount ?? 0} · profileUnavailable=${result.profileUnavailableCount ?? 0} · associationChecked=${qualifier.stats.checked} · associationVerified=${qualifier.stats.verified} · associationNoMatch=${qualifier.stats.noMatch} · associationErrors=${qualifier.stats.providerErrors} · associationConflicts=${qualifier.stats.conflicts} · associationCacheHits=${qualifier.stats.cacheHits} · prePublicVerified=${result.preRecheckVerifiedCount ?? 0} · publicJoinable=${result.players.length} · hiddenNonPublic=${result.nonPublicServerCount ?? 0} · publicVerifyErrors=${result.publicServerVerificationErrorCount ?? 0} · rateLimited=${result.presenceRateLimited === true}`,
+        `/target diagnostic: pool=${result.candidatePoolSize ?? 0} · candidates=${result.candidateCount ?? 0} · presenceChecked=${result.presenceScannedCount ?? 0} · inGame=${result.activeCount ?? 0} · rapBelow=${result.belowRapCount ?? 0} · rapUnavailable=${result.rapUnavailableCount ?? 0} · profileUnavailable=${result.profileUnavailableCount ?? 0} · prePublicVerified=${result.preRecheckVerifiedCount ?? 0} · publicJoinable=${result.players.length} · hiddenNonPublic=${result.nonPublicServerCount ?? 0} · publicVerifyErrors=${result.publicServerVerificationErrorCount ?? 0} · rateLimited=${result.presenceRateLimited === true}`,
       );
 
       const embeds = buildTargetEmbeds(result);
@@ -77,7 +69,7 @@ export const targetsCommand = {
               : `Found ${result.players.length} currently in-game public profile${result.players.length === 1 ? "" : "s"} matching ${formatThresholds(result)}.`
           : result.presenceRateLimited && !result.presenceFallbackUsed
             ? "Roblox is rate-limiting live presence checks right now, and no usable fallback/cache result was available for this pass."
-            : `No result passed all required checks for ${formatThresholds(result)} in this pass. ${result.activeCount ?? 0} candidates were seen in-game; a verified Discord association and public joinability are still required.`;
+            : `No currently in-game public profile matching ${formatThresholds(result)} was verified in this discovery pass.`;
 
       await interaction.editReply({
         content,
@@ -124,8 +116,7 @@ function buildTargetEmbeds(result) {
         `Candidates: ${result.candidateCount ?? 0} · Presence checked: ${result.presenceScannedCount ?? result.freshCandidateCount ?? 0}`,
         `In-game seen: ${result.activeCount ?? 0} · Fully qualified live: ${result.verifiedCount ?? 0}`,
         `RAP below/unavailable: ${result.belowRapCount ?? 0}/${result.rapUnavailableCount ?? 0} · Profile unavailable: ${result.profileUnavailableCount ?? 0}`,
-        `Discord links checked: ${result.associationStats?.checked ?? 0} · Verified: ${result.associationStats?.verified ?? 0} · No match: ${result.associationStats?.noMatch ?? 0} · Errors: ${result.associationStats?.providerErrors ?? 0}`,
-        `Requested: ${result.requestedLimit ?? result.players.length} · Discord-verified returned: ${result.players.length}`,
+        `Requested: ${result.requestedLimit ?? result.players.length} · Returned: ${result.players.length}`,
         formatGameCoverageSummary(result.players),
         `Public-joinable returned: ${result.joinReadyCount ?? 0} · Hidden non-public/stale: ${result.nonPublicServerCount ?? 0}`,
         `Live scan: ${Math.round((result.scanElapsedMs ?? 0) / 1000)}s`,
@@ -170,10 +161,6 @@ function buildTargetEmbeds(result) {
             .join("\n")
         : "Unavailable";
 
-    const discord = player.discordAssociation
-      ? formatDiscordAssociation(player.discordAssociation)
-      : "Unavailable";
-
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle(`${player.displayName} (@${player.username})`)
@@ -185,7 +172,6 @@ function buildTargetEmbeds(result) {
         { name: "RAP", value: rap, inline: true },
         { name: "Value", value, inline: true },
         { name: "Presence", value: player.presenceStatus, inline: true },
-        { name: "Discord", value: discord, inline: false },
         {
           name: "Current game",
           value: player.gameName ?? "Unavailable",
@@ -317,15 +303,3 @@ function escapeMarkdown(value) {
   return String(value).replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
 }
 
-
-function formatDiscordAssociation(association) {
-  const label = association.discordGlobalName
-    ? `${association.discordGlobalName}${association.discordUsername ? ` (@${association.discordUsername})` : ""}`
-    : association.discordUsername
-      ? `@${association.discordUsername}`
-      : association.discordId
-        ? `<@${association.discordId}>`
-        : "Verified Discord";
-  const evidence = association.evidenceUrl ? `\nEvidence: ${association.evidenceUrl}` : "";
-  return `${label}\nSource: ${association.source ?? "Verified association source"}${evidence}`;
-}
