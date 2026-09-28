@@ -109,7 +109,7 @@ export const targetsCommand = {
 function buildTargetEmbeds(result) {
   const summary = new EmbedBuilder()
     .setColor(result.players.length > 0 ? 0x57f287 : 0x2f3136)
-    .setTitle("Automatic Roblox discovery")
+    .setTitle("Potential event collaborators · Roblox")
     .setDescription(
       [
         `Verified ${Number(result.minimumRap ?? TARGET_DEFAULT_MIN_RAP).toLocaleString()}+ RAP index: ${result.verifiedIndexCount ?? 0}`,
@@ -142,12 +142,12 @@ function buildTargetEmbeds(result) {
     .addFields({
       name: "Discovery source",
       value:
-        "Public Roblox presence + public RAP sources; value is informational. " +
+        "Rolimon's is the only candidate and RAP source; Roblox confirms current presence and public joinability. " +
         (truncate((result.sources ?? []).join(" · "), 450) || "Unavailable"),
       inline: false,
     })
     .setFooter({
-      text: "/target searches all Roblox games and requires a public joinable server before display.",
+      text: "Use the public Roblox profile or verified join link to invite potential collaborators.",
     })
     .setTimestamp();
 

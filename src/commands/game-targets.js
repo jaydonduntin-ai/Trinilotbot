@@ -161,11 +161,11 @@ export const rbx2admCommand = createGameTargetCommand({
 function buildGameTargetEmbeds(result) {
   const summary = new EmbedBuilder()
     .setColor(result.players.length > 0 ? 0x57f287 : 0x2f3136)
-    .setTitle(`${result.gameLabel} discovery`)
+    .setTitle(`${result.gameLabel} · Rolimon's candidates`)
     .setDescription(
       [
-        `Candidate pool: ${result.candidatePoolSize ?? 0}`,
-        `Candidates selected: ${result.candidateCount ?? 0}`,
+        `Stored candidate pool: ${result.candidatePoolSize ?? 0}`,
+        `Rolimon's candidates selected: ${result.candidateCount ?? 0}`,
         result.presenceScannedCount !== undefined
           ? `Presence checked: ${result.presenceScannedCount}`
           : null,
@@ -200,7 +200,7 @@ function buildGameTargetEmbeds(result) {
       inline: false,
     })
     .setFooter({
-      text: "Game membership is based on Roblox public presence. RBLXValue MM2 data is enrichment unless min_mm2_value is explicitly used.",
+      text: "Rolimon's supplies the candidate and RAP data; Roblox confirms current game presence and public joinability.",
     })
     .setTimestamp();
 
@@ -232,6 +232,13 @@ function buildGameTargetEmbeds(result) {
           name: "Current game",
           value: player.gameName ?? result.gameLabel,
           inline: true,
+        },
+        {
+          name: "Join",
+          value: player.verifiedJoinUrl
+            ? `[Open verified public server](<${player.verifiedJoinUrl}>)`
+            : "No verified public join link is available.",
+          inline: false,
         },
         ...(result.gameKey === "mm2"
           ? [{
