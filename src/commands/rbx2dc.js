@@ -146,9 +146,14 @@ export const rbx2dcCommand = {
             inline: false,
           }] : []),
           {
+            name: "Confidence",
+            value: formatConfidence(association),
+            inline: false,
+          },
+          {
             name: "Verification",
             value: association.corroborated
-              ? "Corroborated by multiple configured sources"
+              ? "Corroborated by multiple public/verified sources"
               : "Verified by the returned source",
             inline: false,
           },
@@ -170,6 +175,20 @@ export const rbx2dcCommand = {
     }
   },
 };
+
+function formatConfidence(association) {
+  const confidence = association?.confidence;
+  if (!confidence) {
+    return association?.corroborated ? "High · corroborated" : "Verified";
+  }
+
+  const label = confidence.level === "high"
+    ? "High"
+    : confidence.level === "verified"
+      ? "Verified"
+      : "Conflict";
+  return `${label} · ${confidence.score}/100\n${confidence.reason}`;
+}
 
 function formatProviderDiagnostics(diagnostics) {
   if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
