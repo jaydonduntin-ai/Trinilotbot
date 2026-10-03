@@ -574,8 +574,14 @@ function normalizeAssociationRowsToDiscord(payload, requested) {
     ),
   ];
 
+  const rowVerified = rows.some((row) =>
+    row?.verified === true ||
+    ["verified", "confirmed"].includes(String(row?.status ?? "").toLowerCase()),
+  );
+
   return {
-    verified: true,
+    verified: rowVerified,
+    candidate: !rowVerified,
     source:
       rowSources.length > 0
         ? getAssociationSourceName() + " (" + rowSources.join(" + ") + ")"
@@ -722,8 +728,12 @@ function reconcileAssociations(results, target) {
       ...new Set(valid.map((item) => item.discordUsername).filter(Boolean)),
     ];
 
+    const verified = valid.some((item) => item?.verified === true);
+    const candidate = !verified && valid.some((item) => item?.candidate === true);
+
     return {
-      verified: true,
+      verified,
+      candidate,
       source: [...new Set(valid.map((item) => item.source))].join(" + "),
       discordId: ids[0] ?? null,
       discordIds: ids,
@@ -787,7 +797,8 @@ function toEvidenceRecord(item) {
 function evidenceStrength(source) {
   const name = String(source ?? "").toLowerCase();
   if (name.includes("public roblox profile")) return "direct";
-  return "verified";
+  if (name.includes("bloxlink") || name.includes("rover")) return "verified";
+  return "candidate";
 }
 
 function scoreDiscordAssociation(valid, ids) {
@@ -796,18 +807,21 @@ function scoreDiscordAssociation(valid, ids) {
   }
 
   const direct = valid.some((item) => evidenceStrength(item?.source) === "direct");
+  const verified = valid.some((item) => item?.verified === true);
   const independentSources = new Set(valid.map((item) => String(item?.source ?? ""))).size;
-  let score = direct ? 95 : 90;
-  if (independentSources > 1) score = 100;
+  let score = direct ? 95 : verified ? 90 : 60;
+  if (independentSources > 1 && verified) score = 100;
 
   return {
     score,
-    level: score >= 95 ? "high" : "verified",
-    reason: independentSources > 1
-      ? "The same Discord ID is corroborated by multiple public/verified sources."
+    level: score >= 95 ? "high" : verified ? "verified" : "candidate",
+    reason: independentSources > 1 && verified
+      ? "The same Discord ID is corroborated by multiple sources, including verified evidence."
       : direct
         ? "The Roblox account itself publishes an explicit Discord user link."
-        : "A configured verification provider returned an explicit account association.",
+        : verified
+          ? "A configured verification provider returned an explicit account association."
+          : "A configured guild-visible source associates this Roblox ID with this Discord ID, but ownership is not independently verified.",
   };
 }
 
