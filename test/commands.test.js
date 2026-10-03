@@ -55,7 +55,7 @@ test("/rbx2adm is registered for Adopt Me discovery", () => {
   assert.match(definition.description, /Adopt Me/i);
 });
 
-test("/rbx2dc accepts a Roblox identifier and uses verified links", () => {
+test("/rbx2dc accepts a Roblox identifier and supports verified links and candidates", () => {
   const command = commandModules.find(
     (candidate) => candidate.definition.name === "rbx2dc",
   );
@@ -64,7 +64,8 @@ test("/rbx2dc accepts a Roblox identifier and uses verified links", () => {
   assert.equal(definition.options?.length, 1);
   assert.equal(definition.options?.[0]?.name, "username");
   assert.equal(definition.options?.[0]?.required, true);
-  assert.match(definition.description, /verified public Roblox-to-Discord/i);
+  assert.match(definition.description, /verified links/i);
+  assert.match(definition.description, /guild-visible candidates/i);
 });
 
 test("/dev requires RAP and visit thresholds", () => {
