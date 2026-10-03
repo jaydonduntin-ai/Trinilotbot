@@ -8,7 +8,7 @@ import { lookupRobloxToDiscord } from "../sources/associations.js";
 export const rbx2dcCommand = {
   definition: new SlashCommandBuilder()
     .setName("rbx2dc")
-    .setDescription("Look up a verified public Roblox-to-Discord account link.")
+    .setDescription("Look up Roblox-to-Discord verified links and guild-visible candidates.")
     .addStringOption((option) =>
       option
         .setName("username")
@@ -73,7 +73,7 @@ export const rbx2dcCommand = {
         return;
       }
 
-      if (!association?.verified || !/^\d{17,20}$/.test(String(association.discordId ?? association.discordIds?.[0] ?? ""))) {
+      if ((!association?.verified && !association?.candidate) || !/^\d{17,20}$/.test(String(association.discordId ?? association.discordIds?.[0] ?? ""))) {
         const providerFailed = providerDiagnostics.some((entry) => entry.status === "error");
         const noMatchEmbed = new EmbedBuilder()
           .setColor(0x2f3136)
@@ -116,7 +116,7 @@ export const rbx2dcCommand = {
 
       const embed = new EmbedBuilder()
         .setColor(0x5865f2)
-        .setTitle("Verified Roblox → Discord link")
+        .setTitle(association.verified ? "Verified Roblox → Discord link" : "Candidate Roblox → Discord match")
         .addFields(
           {
             name: "Roblox account",
@@ -136,7 +136,7 @@ export const rbx2dcCommand = {
             inline: true,
           },
           {
-            name: "Verified source",
+            name: association.verified ? "Verified source" : "Candidate source",
             value: association.source ?? "Configured association source",
             inline: true,
           },
@@ -152,9 +152,11 @@ export const rbx2dcCommand = {
           },
           {
             name: "Verification",
-            value: association.corroborated
-              ? "Corroborated by multiple public/verified sources"
-              : "Verified by the returned source",
+            value: association.verified
+              ? association.corroborated
+                ? "Corroborated by multiple public/verified sources"
+                : "Verified by the returned source"
+              : "Candidate only · not independently verified",
             inline: false,
           },
         )
@@ -186,7 +188,9 @@ function formatConfidence(association) {
     ? "High"
     : confidence.level === "verified"
       ? "Verified"
-      : "Conflict";
+      : confidence.level === "candidate"
+        ? "Candidate"
+        : "Conflict";
   return `${label} · ${confidence.score}/100\n${confidence.reason}`;
 }
 
