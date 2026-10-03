@@ -734,6 +734,8 @@ function reconcileAssociations(results, target) {
         valid.map((item) => item.evidenceUrl).find(Boolean) ?? null,
       corroborated: valid.length > 1,
       conflict: ids.length > 1,
+      evidence: valid.map(toEvidenceRecord),
+      confidence: scoreDiscordAssociation(valid, ids),
     };
   }
 
@@ -771,6 +773,41 @@ function reconcileAssociations(results, target) {
       valid.map((item) => item.evidenceUrl).find(Boolean) ?? null,
     corroborated: valid.length > 1,
     conflict: ids.length > 1,
+  };
+}
+
+function toEvidenceRecord(item) {
+  return {
+    source: item?.source ?? "Unknown public source",
+    evidenceUrl: item?.evidenceUrl ?? null,
+    strength: evidenceStrength(item?.source),
+  };
+}
+
+function evidenceStrength(source) {
+  const name = String(source ?? "").toLowerCase();
+  if (name.includes("public roblox profile")) return "direct";
+  return "verified";
+}
+
+function scoreDiscordAssociation(valid, ids) {
+  if (ids.length !== 1) {
+    return { score: 0, level: "conflict", reason: "Sources disagree on the Discord identity." };
+  }
+
+  const direct = valid.some((item) => evidenceStrength(item?.source) === "direct");
+  const independentSources = new Set(valid.map((item) => String(item?.source ?? ""))).size;
+  let score = direct ? 95 : 90;
+  if (independentSources > 1) score = 100;
+
+  return {
+    score,
+    level: score >= 95 ? "high" : "verified",
+    reason: independentSources > 1
+      ? "The same Discord ID is corroborated by multiple public/verified sources."
+      : direct
+        ? "The Roblox account itself publishes an explicit Discord user link."
+        : "A configured verification provider returned an explicit account association.",
   };
 }
 
