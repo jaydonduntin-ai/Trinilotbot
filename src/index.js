@@ -13,6 +13,7 @@ import {
   setAllowedGuildIds,
 } from "./security/guild-lock.js";
 
+const BOT_DISABLED = true; // Maintenance mode: keep bot online, disable commands and background scanning.
 const token = process.env.DISCORD_BOT_TOKEN?.trim();
 
 if (!process.env.ASSOCIATION_API_KEY?.trim()) {
@@ -337,7 +338,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   }
 
   try {
-    const desiredCommands = commandModules.map((command) => ({
+    const desiredCommands = (BOT_DISABLED ? [] : commandModules).map((command) => ({
       ...command.definition.toJSON(),
       // Restrict slash commands to server installs and guild channels only.
       // This prevents user-installed copies of the app from exposing commands
@@ -369,6 +370,13 @@ client.once(Events.ClientReady, async (readyClient) => {
       "Slash-command registration check failed. Keeping the bot online so the error can be diagnosed:",
       error,
     );
+  }
+
+  if (BOT_DISABLED) {
+    startupComplete = true;
+    startLocalWatchdog();
+    console.info("Maintenance mode active: commands cleared, background monitoring disabled.");
+    return;
   }
 
   try {
@@ -423,6 +431,11 @@ client.on(Events.GuildCreate, async (guild) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (BOT_DISABLED) {
+    if (interaction.isAutocomplete()) await interaction.respond([]).catch(() => {});
+    else if (interaction.isRepliable()) await interaction.reply({ content: "Bot commands are temporarily disabled.", flags: MessageFlags.Ephemeral }).catch(() => {});
+    return;
+  }
   if (interaction.isAutocomplete()) {
     const command = commandModules.find(
       (candidate) => candidate.definition.name === interaction.commandName,
